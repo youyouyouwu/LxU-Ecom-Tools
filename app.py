@@ -1,136 +1,167 @@
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
+import barcode
+from barcode.writer import ImageWriter
 import pdfplumber
 import io
+import os
 
-# ================= 1. 页面配置与全局状态 =================
-st.set_page_config(page_title="LxU 专属电商工具集", page_icon="🛠️", layout="wide")
+# ================= 1. 页面配置与状态初始化 =================
+st.set_page_config(page_title="LxU 电商 AI 助手", page_icon="🚀", layout="wide")
 st.title("LxU 专属电商工具集 (Gemini 引擎)")
 
-# 核心：防丢失状态缓存
-if 'pdf_keywords' not in st.session_state: st.session_state.pdf_keywords = ""
-if 'pdf_title' not in st.session_state: st.session_state.pdf_title = ""
-if 'trans_result' not in st.session_state: st.session_state.trans_result = ""
-if 'barcode_image' not in st.session_state: st.session_state.barcode_image = None
+# 初始化 Session State，防止页面刷新数据丢失
+state_keys = ['pdf_keywords', 'trans_result', 'label_img', 'last_code']
+for key in state_keys:
+    if key not in st.session_state:
+        st.session_state[key] = "" if 'img' not in key else None
 
 # ================= 2. 侧边栏配置 =================
 with st.sidebar:
-    st.markdown("### ⚙️ 全局配置")
-    st.info("请填入 Google Gemini API Key")
-    api_key = st.text_input("Gemini API Key", type="password")
+    st.header("⚙️ 全局配置")
+    api_key = st.text_input("Gemini API Key", type="password", help="从 Google AI Studio 获取")
+    st.divider()
+    st.markdown("""
+    **LxU 运营助手说明：**
+    1. **智能提词**：分析截图生成 Coupang 标题。
+    2. **本土翻译**：营销级韩语润色。
+    3. **标签生成**：50x30mm 规范打印。
+    """)
 
-# ================= 3. 核心大模型调用逻辑 =================
-def extract_text_from_pdf(pdf_file):
-    text = ""
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text: text += page_text + "\n"
-    return text
+# ================= 3. 核心工具函数 =================
 
-def call_gemini_api(prompt, content_list, api_key):
-    """通用的 Gemini 调用接口，支持纯文本或图文混排"""
-    genai.configure(api_key=api_key)
-    # 使用 1.5 flash 版本，速度极快，极其适合处理电商图文和长文本
-    model = genai.GenerativeModel('gemini-1.5-flash') 
+def call_gemini_api(prompt, contents, key):
+    """通用 Gemini 调用逻辑"""
+    if not key:
+        st.error("请在侧边栏配置 API Key！")
+        return None
+    try:
+        genai.configure(api_key=key)
+        # 使用最新稳定的模型名称
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        response = model.generate_content([prompt] + contents)
+        return response.text
+    except Exception as e:
+        st.error(f"API 调用失败: {str(e)}")
+        return None
+
+def generate_label_50x30(code, title, option):
+    """生成 50x30mm 标签 (203 DPI)"""
+    # 尺寸：400x240 像素
+    width, height = 400, 240
+    img = Image.new('RGB', (width, height), 'white')
+    draw = ImageDraw.Draw(img)
     
-    # 将 prompt 和 用户上传的内容合并发送
-    full_prompt = [prompt] + content_list
-    response = model.generate_content(full_prompt)
-    return response.text
+    # --- 1. 条码生成 ---
+    try:
+        code128 = barcode.get('code128', code, writer=ImageWriter())
+        # 渲染条码，去掉默认大字文本，我们手动绘制
+        barcode_buffer = io.BytesIO()
+        code128.write(barcode_buffer, options={"module_height": 10.0, "font_size": 1, "text_distance": 1})
+        barcode_raw = Image.open(barcode_buffer)
+        # 缩放并粘贴条码
+        barcode_img = barcode_raw.resize((360, 100))
+        img.paste(barcode_img, (20, 85))
+    except Exception as e:
+        st.error(f"条码生成失败: {e}")
 
-# ================= 4. 页面布局 =================
-tab1, tab2, tab3 = st.tabs(["📑 智能提词与标题", "🇰🇷 营销级本土翻译", "🏷️ 标签与条码生成"])
+    # --- 2. 文本绘制 ---
+    # 尝试加载字体 (适配 Linux/Streamlit Cloud)
+    def get_font(size):
+        font_paths = [
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", # Common in Linux
+            "C:/Windows/Fonts/msyh.ttc", # Windows
+            "Arial.ttf" # Fallback
+        ]
+        for p in font_paths:
+            if os.path.exists(p):
+                return ImageFont.truetype(p, size)
+        return ImageFont.load_default()
 
-# ---------- 功能一：智能提词与标题 ----------
+    font_title = get_font(28)
+    font_option = get_font(24)
+    font_footer = get_font(20)
+
+    # 绘制标题 (居中)
+    draw.text((width/2, 35), title, fill='black', font=font_title, anchor="mm")
+    # 绘制选项 (居中)
+    draw.text((width/2, 70), option, fill='black', font=font_option, anchor="mm")
+    # 绘制数字
+    draw.text((width/2, 195), code, fill='black', font=font_footer, anchor="mm")
+    # 绘制 Made in China
+    draw.text((width/2, 220), "MADE IN CHINA", fill='black', font=font_footer, anchor="mm")
+    
+    return img
+
+# ================= 4. 前端交互界面 =================
+
+tab1, tab2, tab3 = st.tabs(["📑 智能提词/标题", "🇰🇷 本土化翻译", "🏷️ 50x30 标签生成"])
+
+# --- Tab 1: 提词分析 ---
 with tab1:
-    st.subheader("分析产品详情提取卖点 (支持截图/长图/PDF)")
-    uploaded_file = st.file_uploader("直接拖拽或粘贴详情页截图", type=["pdf", "png", "jpg", "jpeg"], key="f1_upload")
+    st.subheader("分析产品详情 (提取卖点与标题)")
+    up_file = st.file_uploader("上传详情页截图或PDF", type=["png", "jpg", "jpeg", "pdf"])
+    if st.button("开始分析", type="primary"):
+        if up_file:
+            with st.spinner("Gemini 视觉引擎处理中..."):
+                prompt = """作为韩国Coupang运营专家，请分析该产品：
+                1. 提取3个高转化的【韩文】搜索关键词。
+                2. 生成一个【韩文】标题，必须以 'LxU' 开头，符合SEO规范。
+                直接输出结果，不要解释。"""
+                input_data = []
+                if up_file.type == "application/pdf":
+                    with pdfplumber.open(up_file) as pdf:
+                        text = "".join([p.extract_text() for p in pdf.pages])
+                        input_data.append(text)
+                else:
+                    input_data.append(Image.open(up_file))
+                
+                st.session_state.pdf_keywords = call_gemini_api(prompt, input_data, api_key)
     
-    if st.button("生成竞品词与标题", type="primary"):
-        if not api_key:
-            st.error("请先在左侧输入 Gemini API Key！")
-        elif uploaded_file:
-            with st.spinner("Gemini 视觉引擎分析中..."):
-                try:
-                    prompt = """你是一个韩国Coupang资深运营专家。请直接分析提供的文本或图片内容，执行两个任务：
-1. 深入挖掘产品卖点，提取3个核心【韩文】关键词，用于前台竞品查询。
-2. 生成一个符合Coupang搜索SEO规范的【韩文】产品标题，要求品牌名固定为'LxU'并且必须放在最前面。
-
-返回格式必须严格如下，不要使用Markdown加粗(不要有**符号)，不要有多余废话：
-核心词：[词1], [词2], [词3]
-标题：LxU [生成的标题]
-"""
-                    content_to_send = []
-                    if uploaded_file.name.lower().endswith('.pdf'):
-                        # PDF 提取文字送给 Gemini
-                        text = extract_text_from_pdf(uploaded_file)
-                        content_to_send.append(text)
-                    else:
-                        # 图片直接送给 Gemini 的原生多模态视觉神经！
-                        img = Image.open(uploaded_file)
-                        content_to_send.append(img)
-
-                    res = call_gemini_api(prompt, content_to_send, api_key)
-                    
-                    if "核心词：" in res and "标题：" in res:
-                        parts = res.split("标题：")
-                        st.session_state.pdf_keywords = parts[0].replace("核心词：", "").strip()
-                        st.session_state.pdf_title = parts[1].strip()
-                    else:
-                        st.session_state.pdf_keywords, st.session_state.pdf_title = "格式异常，请看完整输出", res
-                    
-                    st.success("✅ 生成成功！速度是不是快多了？")
-                except Exception as e:
-                    st.error(f"调用失败: {str(e)}")
-        else:
-            st.warning("请上传文件！")
-            
     if st.session_state.pdf_keywords:
-        st.text_area("核心关键词 (Top 3)", value=st.session_state.pdf_keywords, height=68)
-        st.text_area("LxU 专属 Coupang 标题", value=st.session_state.pdf_title, height=68)
+        st.success("分析完成！")
+        st.text_area("建议方案", value=st.session_state.pdf_keywords, height=200)
 
-# ---------- 功能二：本土化营销翻译 ----------
+# --- Tab 2: 营销翻译 ---
 with tab2:
-    st.subheader("电商营销本土化翻译 (支持直接输入或截图识别)")
+    st.subheader("中韩文营销翻译 (带视觉识别)")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        txt_input = st.text_area("输入需要翻译的内容", placeholder="比如：这款猫窝保暖性极好，适合冬天...")
+    with col_r:
+        img_input = st.file_uploader("或上传带有文字的截图", type=["png", "jpg", "jpeg"])
     
-    col1, col2 = st.columns(2)
-    with col1:
-        text_input = st.text_area("方式1：输入需要翻译的文案", height=150, placeholder="支持中文直接翻译，或韩文文案润色...")
-    with col2:
-        img_input = st.file_uploader("方式2：上传韩文/中文截图", type=["png", "jpg", "jpeg"], key="f2_upload")
-        
-    if st.button("开始本土化翻译", type="primary", key="f2_btn"):
-        if not api_key:
-            st.error("请先在左侧输入 Gemini API Key！")
-        elif text_input or img_input:
-            with st.spinner("正在注入韩国电商灵魂..."):
-                try:
-                    prompt = """你是一个韩国本土资深电商营销专家。请分析我提供的文案或图片中的文字，将其翻译、润色为极具“韩国本土电商营销风格”的韩语。
-要求：
-1. 绝对不能是生硬的机器直译，要符合韩国Coupang消费者的阅读习惯。
-2. 带有极强的促单感和场景感，确保用词精准、吸睛。
-3. 直接输出最终的韩文结果，不要任何多余的解释。
-"""
-                    content_to_send = []
-                    if text_input:
-                        content_to_send.append(text_input)
-                    if img_input:
-                        img = Image.open(img_input)
-                        content_to_send.append(img)
-                        
-                    st.session_state.trans_result = call_gemini_api(prompt, content_to_send, api_key)
-                    st.success("✅ 翻译完成！纯正本土味。")
-                except Exception as e:
-                    st.error(f"调用失败: {str(e)}")
-        else:
-            st.warning("请输入文字或上传截图！")
+    if st.button("翻译并润色", type="primary"):
+        with st.spinner("正在转换为本土营销语..."):
+            prompt = "你是一个韩国本土电商专家，请将内容翻译为地道的、有促单感的韩文营销文案。直接输出韩文。"
+            contents = [txt_input] if txt_input else []
+            if img_input: contents.append(Image.open(img_input))
+            st.session_state.trans_result = call_gemini_api(prompt, contents, api_key)
 
     if st.session_state.trans_result:
-        st.text_area("韩文营销文案 (可直接复制)", value=st.session_state.trans_result, height=200)
+        st.text_area("润色结果", value=st.session_state.trans_result, height=200)
 
-# ---------- 功能三：标签与条码 ----------
+# --- Tab 3: 标签生成 ---
 with tab3:
-    st.subheader("50x20mm 标准 Code128 标签生成")
-    st.info("🚧 待接入图像渲染逻辑...")
+    st.subheader("50mm x 30mm 标准货品标签")
+    c1, c2, c3 = st.columns(3)
+    in_code = c1.text_input("条码/SKU编号", value="880123456789")
+    in_title = c2.text_input("产品名称", value="LxU 宠物用品")
+    in_opt = c3.text_input("销售规格", value="款式: 奶油黄 - L码")
+    
+    if st.button("生成标签预览", type="primary"):
+        st.session_state.label_img = generate_label_50x30(in_code, in_title, in_opt)
+        st.session_state.last_code = in_code
+
+    if st.session_state.label_img:
+        st.image(st.session_state.label_img, width=400)
+        # 下载准备
+        buf = io.BytesIO()
+        st.session_state.label_img.save(buf, format="PNG")
+        st.download_button(
+            label="💾 下载标签图片",
+            data=buf.getvalue(),
+            file_name=f"Label_{st.session_state.last_code}.png",
+            mime="image/png"
+        )
