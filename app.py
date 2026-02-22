@@ -10,16 +10,13 @@ import time
 import json
 import re
 
-# ================= 1. 状态锁与页面配置 =================
-st.set_page_config(page_title="LxU 测款指挥舱", layout="wide")
-
-# 核心状态保护：确保左右板块互不干扰，下载不重置
+# ================= 1. 状态锁初始化 (防止跨组件干扰) =================
 if 'extractions' not in st.session_state:
     st.session_state.extractions = []
-if 'label_preview' not in st.session_state:
-    st.session_state.label_preview = None
+if 'current_label' not in st.session_state:
+    st.session_state.current_label = None
 
-# ================= 2. 核心工具函数 (1:1 样本复刻) =================
+# ================= 2. 核心工具函数 =================
 
 def wrap_text_pil(text, font, max_width, draw_surface):
     """自动折行：确保中间文字不溢出"""
@@ -39,24 +36,23 @@ def wrap_text_pil(text, font, max_width, draw_surface):
     return lines
 
 def make_label_50x30(sku, title, spec):
-    """高清 50x30mm 标签生成器 (Code 128 格式)"""
-    width, height = 1000, 600 
+    """高清复刻标签 (Code 128 + MADE IN CHINA)"""
+    width, height = 1000, 600 # 高清画布
     img = Image.new('RGB', (width, height), 'white')
     draw = ImageDraw.Draw(img)
 
     def load_font(size, is_bold=False):
-        # 针对 Streamlit Cloud Linux 环境优化路径
         font_paths = [
             "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
             "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-            "C:/Windows/Fonts/malgunbd.ttf", "Arialbd.ttf"
+            "C:/Windows/Fonts/malgunbd.ttf", "Arial.ttf"
         ]
         if not is_bold: font_paths.reverse()
         for p in font_paths:
             if os.path.exists(p): return ImageFont.truetype(p, size)
         return ImageFont.load_default()
 
-    # --- 1. 绘制条形码 (Code 128) ---
+    # 1. 顶部条码 (Code 128)
     try:
         code_factory = barcode.get_barcode_class('code128')
         c128 = code_factory(sku, writer=ImageWriter())
@@ -66,19 +62,19 @@ def make_label_50x30(sku, title, spec):
         img.paste(b_img, (50, 25))
     except: pass
 
-    # --- 2. 绘制文本 (根据样本比例优化) ---
+    # 2. 文字绘制 (紧凑布局优化)
     f_sku = load_font(68, is_bold=True)
     f_title = load_font(52, is_bold=True)
     f_bottom = load_font(42)
 
-    # 货号 SKU
+    # SKU 货号
     draw.text((500, 315), sku, fill='black', font=f_sku, anchor="mm")
-    # 强制产地标识
+    # 底部 MADE IN CHINA
     draw.text((500, 560), "MADE IN CHINA", fill='black', font=f_bottom, anchor="mm")
 
-    # 中间标题 (自动折行且垂直居中)
+    # 中间标题折行居中
     full_title = f"{title} {spec}".strip()
-    max_text_width = 800  # 安全边距
+    max_text_width = 800
     line_padding = 6
     line_height = f_title.getbbox("A")[3] + line_padding
     wrapped_lines = wrap_text_pil(full_title, f_title, max_text_width, draw)
@@ -93,7 +89,7 @@ def make_label_50x30(sku, title, spec):
     return img
 
 def render_copy_button(text, unique_key):
-    """带反馈的一键复制按钮"""
+    """带反馈的一键复制组件"""
     html_code = f"""
     <!DOCTYPE html>
     <html><head><style>
@@ -116,69 +112,98 @@ def render_copy_button(text, unique_key):
     """
     components.html(html_code, height=45)
 
-# ================= 3. 页面布局：识图(左) vs 标签(右) =================
+# ================= 3. 识图逻辑 (基于你提供的最稳版本) =================
 
-# 侧边栏 API 配置
+def process_lxu_long_image(uploaded_file, prompt):
+    try:
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            system_instruction="你是一个精通韩国 Coupang 选品和竞品分析的专家，品牌名为 LxU。"
+        )
+        temp_name = f"temp_{int(time.time())}_{uploaded_file.name}"
+        with open(temp_name, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        gen_file = genai.upload_file(path=temp_name)
+        response = model.generate_content([gen_file, prompt])
+        if os.path.exists(temp_name): os.remove(temp_name)
+        return response.text
+    except Exception as e:
+        return f"❌ 出错: {str(e)}"
+
+# ================= 4. 主界面布局 =================
+
+st.set_page_config(page_title="LxU 测款指挥舱", layout="wide")
+
+# 侧边栏：仅保留配置
 with st.sidebar:
     st.header("⚙️ 引擎配置")
     api_key = st.text_input("Gemini API Key", value=st.secrets.get("GEMINI_API_KEY", ""), type="password")
     if api_key: genai.configure(api_key=api_key)
-    else: st.warning("👈 请先填入 API Key"); st.stop()
+    else: st.stop()
 
-st.title("⚡ LxU 测款指挥舱 (最终满血版)")
+st.title("⚡ LxU 测款指挥舱 (全功能独立版)")
 
+# 左右双板块布局
 col_ext, col_lab = st.columns([1.1, 0.9], gap="large")
 
-# --- 板块 1：测款识图提取 (左侧独立板块) ---
+# --- 板块 1：测款识图提取 (左侧) ---
 with col_ext:
     st.subheader("🎯 极速识图提取")
-    st.info("💡 粘贴截图(Ctrl+V)后点击下方按钮")
-    files = st.file_uploader("📥 图片上传/粘贴区", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="uploader")
+    st.info("💡 微信截图后在此按 `Ctrl+V` 即可！")
+    files = st.file_uploader("📥 全局粘贴/拖拽区", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="ext_uploader")
     
     if files:
-        if st.button("🚀 开始极速解析", type="primary", use_container_width=True):
+        if st.button("🚀 极速提取核心信息", type="primary", use_container_width=True):
             new_exts = []
             for f in files:
-                model = genai.GenerativeModel("gemini-2.5-flash")
-                prompt = "提取5个韩国买家真实搜索的具体商品名词。禁止说明，必须严格 JSON 格式：{\"keywords\": [{\"kr\": \"名词\", \"cn\": \"翻译\"}...], \"name_cn\": \"LxU [名]\", \"name_kr\": \"LxU [名]\"}"
-                with st.spinner(f"分析 {f.name}..."):
+                prompt = """
+                任务：极简模式测款提取。必须严格按照 JSON 格式输出，严禁任何废话。
+                提取 5 个韩国买家真实搜索的具体商品名词。
+                {
+                  "keywords": [{"kr": "精准词", "cn": "翻译"}...],
+                  "name_cn": "LxU [品名]",
+                  "name_kr": "LxU [品名]"
+                }
+                """
+                with st.spinner(f"正在分析 {f.name}..."):
+                    raw_text = process_lxu_long_image(f, prompt)
                     try:
-                        res = model.generate_content([f, prompt])
-                        # 强力清洗：只抓取 JSON 部分，防止解析失败
-                        json_match = re.search(r"\{.*\}", res.text, re.DOTALL)
-                        if json_match:
-                            new_exts.append({"file": f.name, "data": json.loads(json_match.group())})
+                        # 强力清洗 JSON
+                        json_str = re.search(r"\{.*\}", raw_text, re.DOTALL).group()
+                        new_exts.append({"file": f.name, "img": f, "data": json.loads(json_str)})
                     except: st.error(f"{f.name} 解析失败")
             st.session_state.extractions = new_exts
 
-    # 渲染结果 (下载时不会消失)
+    # 渲染识图结果 (从状态锁读取)
     for idx, item in enumerate(st.session_state.extractions):
-        with st.container(border=True):
-            st.write(f"📦 **源文件：{item['file']}**")
+        with st.expander(f"🖼️ {item['file']} 提取结果", expanded=True):
+            st.image(item['img'], use_column_width=True)
+            st.markdown("##### 🔍 前台精准竞品搜索词")
             for i, kw in enumerate(item['data'].get('keywords', [])):
                 c1, c2, c3 = st.columns([0.1, 0.6, 0.3])
-                c1.write(f"{i+1}")
+                c1.write(f"**{i+1}**")
                 with c2: render_copy_button(kw['kr'], f"kw_{idx}_{i}")
                 c3.write(f"<div style='padding-top:12px; color:#666;'>{kw['cn']}</div>", unsafe_allow_html=True)
-            st.write("---")
-            render_copy_button(item['data'].get('name_cn', ''), f"cn_{idx}")
-            render_copy_button(item['data'].get('name_kr', ''), f"kr_{idx}")
+            
+            st.markdown("##### 🏷️ 内部管理品名")
+            nc1, nc2 = st.columns([1, 9]); nc1.write("CN 中文")
+            with nc2: render_copy_button(item['data'].get('name_cn', ''), f"cn_{idx}")
+            kc1, kc2 = st.columns([1, 9]); kc1.write("KR 韩文")
+            with kc2: render_copy_button(item['data'].get('name_kr', ''), f"kr_{idx}")
 
-# --- 板块 2：50x30 标签工具 (右侧独立板块) ---
-with col_right:
+# --- 板块 2：50x30 标签生成 (右侧) ---
+with col_lab:
     st.subheader("🏷️ 50x30 标签工具")
     with st.form("label_form"):
         v_sku = st.text_input("货号 (SKU)", "S0033507379541")
         v_title = st.text_input("品名", "[LxU] 용접돋보기 고글형 확대경")
         v_spec = st.text_input("规格", "1.00배율 2개입")
-        submit = st.form_submit_button("🔥 生成并锁定预览", use_container_width=True)
-        
-        if submit:
-            st.session_state.label_preview = make_label_50x30(v_sku, v_title, v_spec)
+        if st.form_submit_button("🔥 生成高清标签", use_container_width=True):
+            st.session_state.current_label = make_label_50x30(v_sku, v_title, v_spec)
             st.session_state.last_sku = v_sku
 
-    if st.session_state.label_preview:
-        st.image(st.session_state.label_preview, use_column_width=True, caption="高清打印预览")
+    if st.session_state.current_label:
+        st.image(st.session_state.current_label, use_column_width=True, caption="高清打印预览")
         buf = io.BytesIO()
-        st.session_state.label_preview.save(buf, format="PNG", dpi=(300, 300))
+        st.session_state.current_label.save(buf, format="PNG", dpi=(300, 300))
         st.download_button("📥 下载标签 (PNG)", buf.getvalue(), f"LxU_{st.session_state.last_sku}.png", use_container_width=True)
