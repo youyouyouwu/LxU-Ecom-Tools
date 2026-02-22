@@ -29,7 +29,6 @@ if 'label_img' not in st.session_state: st.session_state.label_img = None
 
 # ================= 2. 独立定制的一键复制组件 =================
 def render_copy_button(text):
-    """手写的前端 HTML+JS 复制组件，点击反馈丝滑，无需刷新页面"""
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -51,7 +50,7 @@ def render_copy_button(text):
     function copyText() {{
         var copyText = document.getElementById("inputBox");
         copyText.select();
-        document.execCommand("copy"); // 兼容性最强的浏览器复制命令
+        document.execCommand("copy"); 
         var btn = document.getElementById("copyBtn");
         btn.innerText = "✅ 复制成功";
         btn.style.backgroundColor = "#dcfce7";
@@ -62,13 +61,12 @@ def render_copy_button(text):
             btn.style.backgroundColor = "#ffffff";
             btn.style.borderColor = "#d1d5db";
             btn.style.color = "#374151";
-        }}, 2000); // 2秒后恢复原状
+        }}, 2000); 
     }}
     </script>
     </body>
     </html>
     """
-    # 渲染高度定为 45 像素，完美融合进 Streamlit 的布局
     components.html(html_code, height=45)
 
 # ================= 3. 极简识图引擎 =================
@@ -134,7 +132,7 @@ def make_label_50x30(sku, title, spec):
 tab1, tab2 = st.tabs(["🎯 极简测款提词", "🏷️ 50x30 标签生成"])
 
 with tab1:
-    st.subheader("核心竞品词与内部品名提取 (带点击反馈复制)")
+    st.subheader("核心竞品词与内部品名提取")
     files = st.file_uploader("上传测款图片", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
     
     if files and st.button("🚀 极速提取核心信息", type="primary"):
@@ -164,32 +162,28 @@ with tab1:
                 json_str = res_text.replace("```json", "").replace("```", "").strip()
                 data = json.loads(json_str)
                 
-                # --- 渲染搜索词列表 ---
+                # --- 渲染搜索词列表 (去除表头，直接跟中文) ---
                 st.markdown("#### 🔍 前台竞品搜索词")
-                hc1, hc2, hc3 = st.columns([1, 5, 4])
-                hc1.markdown("<div style='padding-top:10px;'>**序号**</div>", unsafe_allow_html=True)
-                hc2.markdown("<div style='padding-top:10px;'>**韩文搜索词 (点右侧按钮提取)**</div>", unsafe_allow_html=True)
-                hc3.markdown("<div style='padding-top:10px;'>**中文解释**</div>", unsafe_allow_html=True)
                 
                 for i, item in enumerate(data.get('keywords', [])):
-                    c1, c2, c3 = st.columns([1, 5, 4])
-                    c1.markdown(f"<div style='padding-top:12px;'>**{i+1}**</div>", unsafe_allow_html=True)
-                    # 💡 调用原生手写组件渲染带常驻按钮的输入框
+                    c1, c2, c3 = st.columns([0.5, 6, 4])
+                    # 使用 CSS 控制字体样式，彻底告别 Markdown 星号
+                    c1.markdown(f"<div style='padding-top:12px; font-weight:bold; color:#555;'>{i+1}</div>", unsafe_allow_html=True)
                     with c2:
                         render_copy_button(item.get('kr', ''))
-                    c3.markdown(f"<div style='padding-top:12px; color:#4b5563;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
+                    c3.markdown(f"<div style='padding-top:12px; color:#666;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # --- 渲染内部品名 ---
+                # --- 渲染内部品名 (去除星号) ---
                 st.markdown("#### 🏷️ 内部管理品名")
                 nc1, nc2 = st.columns([1, 9])
-                nc1.markdown("<div style='padding-top:12px;'>🇨🇳 **中文**</div>", unsafe_allow_html=True)
+                nc1.markdown("<div style='padding-top:12px; color:#555;'>CN 中文</div>", unsafe_allow_html=True)
                 with nc2:
                     render_copy_button(data.get('name_cn', ''))
                 
                 kc1, kc2 = st.columns([1, 9])
-                kc1.markdown("<div style='padding-top:12px;'>🇰🇷 **韩文**</div>", unsafe_allow_html=True)
+                kc1.markdown("<div style='padding-top:12px; color:#555;'>KR 韩文</div>", unsafe_allow_html=True)
                 with kc2:
                     render_copy_button(data.get('name_kr', ''))
                 
@@ -199,7 +193,7 @@ with tab1:
                 
             st.divider()
         
-        st.success("✅ 所有图片解析完毕！")
+        st.success("✅ 解析完毕，点击右侧按钮极速复制！")
 
 with tab2:
     st.subheader("50x30mm 标准货品标签")
