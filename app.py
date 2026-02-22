@@ -38,16 +38,26 @@ def render_copy_button(text, key):
     """
     components.html(html_code, height=45)
 
-def process_lxu_image_bytes(img_bytes, prompt):
-    """内存直传 + 原生 JSON 极速引擎"""
+def process_lxu_file_bytes(file_bytes, filename, prompt):
+    """💡 升级版：兼容图片与 PDF 内存直传的极速引擎"""
     try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-flash",
             system_instruction="你是一个精通韩国 Coupang 选品和竞品分析的专家，品牌名为 LxU。"
         )
-        img = Image.open(io.BytesIO(img_bytes))
+        
+        # 智能分流：根据后缀名决定如何将内存数据交给大模型
+        if filename.lower().endswith(".pdf"):
+            payload = [
+                {"mime_type": "application/pdf", "data": file_bytes},
+                prompt
+            ]
+        else:
+            img = Image.open(io.BytesIO(file_bytes))
+            payload = [img, prompt]
+            
         response = model.generate_content(
-            [img, prompt],
+            payload,
             generation_config={"response_mime_type": "application/json"}
         )
         return response.text
@@ -56,7 +66,6 @@ def process_lxu_image_bytes(img_bytes, prompt):
 
 # ================= 3. 界面配置与侧边栏 =================
 
-# 💡 核心改动：initial_sidebar_state="collapsed" 让侧边栏默认收起
 st.set_page_config(page_title="品名识别生成工具", layout="wide", initial_sidebar_state="collapsed")
 
 with st.sidebar:
@@ -81,21 +90,26 @@ with st.sidebar:
 # ================= 4. 主界面 (测款识图) =================
 
 st.title("🔎 品名识别生成工具")
-st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。标题生成已优化为【客观卖点+核心词】的黄金平衡比例，拒绝极端堆砌！")
+st.info("💡 **效率提示**：支持拖拽上传图片或 **PDF长图文档**。标题生成采用【客观卖点+核心词】平衡比例。")
 
-files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+# 💡 核心改动：允许上传列表中加入 PDF 格式
+files = st.file_uploader("📥 [全局上传/拖拽区]", type=["png", "jpg", "jpeg", "webp", "pdf"], accept_multiple_files=True)
 
 if files:
     if st.button("🚀 开始极速精准提取", type="primary", use_container_width=True):
         new_exts = []
         for idx, f in enumerate(files):
-            img_bytes = f.getvalue() 
+            file_bytes = f.getvalue() 
             
-            with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
-                st.image(img_bytes, use_column_width=True)
+            with st.expander(f"📁 查看源文件: {f.name}", expanded=False):
+                # 💡 如果是 PDF，不强制渲染为图片，避免报错崩溃
+                if f.name.lower().endswith(".pdf"):
+                    st.success("📄 PDF 详情页长图已成功加载，可正常解析。")
+                else:
+                    st.image(file_bytes, use_column_width=True)
                 
             prompt_full = """
-            任务：分析图片，为该商品生成一套完整的Coupang上架信息。
+            任务：分析图片/文档，为该商品生成一套完整的Coupang上架信息。
             
             ⚠️ 必须遵守的极其严格规则：
             1. 搜索词(keywords)：提取5个精准查找同款的【实体名词】，绝对禁止泛流量词。
@@ -114,7 +128,7 @@ if files:
             }
             """
             with st.spinner(f"⚡ 极限冲刺中 {f.name} ..."):
-                res_text = process_lxu_image_bytes(img_bytes, prompt_full)
+                res_text = process_lxu_file_bytes(file_bytes, f.name, prompt_full)
             
             try:
                 json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group() if "{" in res_text else res_text
@@ -122,7 +136,7 @@ if files:
                 
                 new_exts.append({
                     "file": f.name, 
-                    "bytes": img_bytes, 
+                    "bytes": file_bytes, 
                     "data": data,
                     "kw_history": [],     
                     "name_history": [],
@@ -161,7 +175,7 @@ if st.session_state.extractions:
                 """
                 success = False
                 with st.spinner("🔄 光速挖掘中..."):
-                    res_text = process_lxu_image_bytes(item['bytes'], prompt_kw)
+                    res_text = process_lxu_file_bytes(item['bytes'], item['file'], prompt_kw)
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group() if "{" in res_text else res_text
                         new_kw_data = json.loads(json_str)
@@ -207,7 +221,7 @@ if st.session_state.extractions:
                 """
                 success = False
                 with st.spinner("🔄 光速命名中..."):
-                    res_text = process_lxu_image_bytes(item['bytes'], prompt_name)
+                    res_text = process_lxu_file_bytes(item['bytes'], item['file'], prompt_name)
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group() if "{" in res_text else res_text
                         new_name_data = json.loads(json_str)
@@ -266,7 +280,7 @@ if st.session_state.extractions:
                 """
                 success = False
                 with st.spinner("🔄 正在重写平衡版销售标题..."):
-                    res_text = process_lxu_image_bytes(item['bytes'], prompt_title)
+                    res_text = process_lxu_file_bytes(item['bytes'], item['file'], prompt_title)
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group() if "{" in res_text else res_text
                         new_title_data = json.loads(json_str)
