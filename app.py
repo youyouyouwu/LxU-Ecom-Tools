@@ -84,7 +84,6 @@ if files:
             with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
                 st.image(img_bytes, use_column_width=True)
                 
-            # 💡 核心修复：移除了多余的 chat_message 空壳，只保留精简的 spinner 动画
             prompt_full = """
             任务：分析图片，为该商品生成一套完整的Coupang上架信息。
             
@@ -134,8 +133,8 @@ if st.session_state.extractions:
         # ---------------- A. 关键词区域 ----------------
         c_title, c_undo_kw, c_btn_kw = st.columns([6, 2, 2])
         with c_title:
-            # 💡 核心UI修改：换成了放大镜，并修改了文案
-            st.markdown(f"### 🔎 {item['file']} 建议搜索关键词")
+            # 💡 已根据要求去掉了 {item['file']} 变量
+            st.markdown("### 🔎 建议搜索关键词")
             
         with c_undo_kw:
             if item.get('kw_history'):
