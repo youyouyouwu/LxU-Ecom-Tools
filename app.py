@@ -73,7 +73,7 @@ with st.sidebar:
 # ================= 4. 主界面 (测款识图) =================
 
 st.title("🔎 品名识别生成工具")
-st.info("💡 **全能矩阵**：已加入无标点 Coupang 前台 SEO 标题生成。全部支持无限【撤销返回】！")
+st.info("💡 **全能矩阵**：Coupang 前台 SEO 标题已补充中文对照。全部支持无限【撤销返回】！")
 
 files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
@@ -87,6 +87,7 @@ if files:
                 st.image(img_bytes, use_column_width=True)
                 
             with st.chat_message("assistant"):
+                # 💡 核弹级优化：在标题部分加入了 title_cn
                 prompt_full = """
                 任务：分析图片，为该商品生成一套完整的Coupang上架信息。
                 
@@ -100,6 +101,7 @@ if files:
                   "keywords": [{"kr": "精准韩文名词", "cn": "中文翻译"}],
                   "name_cn": "LxU [简短中文实体品名]",
                   "name_kr": "LxU [韩文实体品名]",
+                  "title_cn": "LxU [中文翻译的前台销售标题]",
                   "title_kr": "LxU [纯空格分隔的韩文无标点SEO销售标题]"
                 }
                 """
@@ -116,7 +118,7 @@ if files:
                         "data": data,
                         "kw_history": [],     
                         "name_history": [],
-                        "title_history": []   # 💡 新增：标题历史记忆栈
+                        "title_history": []   # 标题记忆栈
                     })
                 except Exception:
                     st.error(f"解析失败。原始内容：\n{res_text}")
@@ -233,20 +235,25 @@ if st.session_state.extractions:
             st.markdown("##### 🛒 前台销售标题 (Coupang SEO)")
             
         with t_undo_title:
+            # 💡 标题区的撤销也支持双语同步回退
             if item.get('title_history'):
                 if st.button("⏪ 撤销返回", key=f"undo_title_{idx}", use_container_width=True):
                     prev_title = st.session_state.extractions[idx]['title_history'].pop()
-                    st.session_state.extractions[idx]['data']['title_kr'] = prev_title
+                    st.session_state.extractions[idx]['data']['title_cn'] = prev_title['title_cn']
+                    st.session_state.extractions[idx]['data']['title_kr'] = prev_title['title_kr']
                     st.rerun()
                     
         with t_btn_title:
             if st.button("🔄 换一个标题", key=f"btn_title_{idx}", use_container_width=True):
                 prompt_title = """
-                任务：为该商品生成一个【全新】的Coupang前台销售标题。
-                要求：必须符合韩国本土化SEO风格，适度体现不同于之前的卖点以提高点击率。
-                ⚠️ 【绝对禁止】夸张宣传，绝对禁止在标题中使用任何标点符号（只能用空格分隔词组）！
+                任务：为该商品生成一套【全新】的Coupang前台销售标题（含中文翻译）。
+                要求：符合韩国本土化SEO风格，适度体现不同于之前的卖点以提高点击率。
+                ⚠️ 【绝对禁止】夸张宣传，绝对禁止在韩文标题(title_kr)中使用任何标点符号（只能用空格分隔词组）！
                 只输出 JSON：
-                {"title_kr": "LxU [全新韩文无标点SEO销售标题]"}
+                {
+                  "title_cn": "LxU [全新中文翻译的前台销售标题]",
+                  "title_kr": "LxU [全新韩文无标点SEO销售标题]"
+                }
                 """
                 success = False
                 with st.spinner("🔄 正在重写销售标题..."):
@@ -255,9 +262,14 @@ if st.session_state.extractions:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                         new_title_data = json.loads(json_str)
                         
-                        current_title = st.session_state.extractions[idx]['data'].get('title_kr', '')
+                        # 把当前的双语标题存入历史栈
+                        current_title = {
+                            "title_cn": st.session_state.extractions[idx]['data'].get('title_cn', ''),
+                            "title_kr": st.session_state.extractions[idx]['data'].get('title_kr', '')
+                        }
                         st.session_state.extractions[idx]['title_history'].append(current_title)
                         
+                        st.session_state.extractions[idx]['data']['title_cn'] = new_title_data.get('title_cn', '')
                         st.session_state.extractions[idx]['data']['title_kr'] = new_title_data.get('title_kr', '')
                         success = True
                     except Exception:
@@ -266,6 +278,11 @@ if st.session_state.extractions:
                 if success:
                     st.rerun()
 
-        tc1, tc2 = st.columns([1, 9])
-        tc1.write("KR 标题")
-        with tc2: render_copy_button(item['data'].get('title_kr', ''), f"title_kr_{idx}")
+        # 💡 双语独立展示，方便团队审核核对
+        tc_cn1, tc_cn2 = st.columns([1, 9])
+        tc_cn1.write("CN 中文")
+        with tc_cn2: render_copy_button(item['data'].get('title_cn', ''), f"title_cn_{idx}")
+
+        tc_kr1, tc_kr2 = st.columns([1, 9])
+        tc_kr1.write("KR 韩文")
+        with tc_kr2: render_copy_button(item['data'].get('title_kr', ''), f"title_kr_{idx}")
