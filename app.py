@@ -54,19 +54,28 @@ def process_lxu_image_bytes(img_bytes, prompt):
     except Exception as e:
         return f'{{"error": "{str(e)}" }}'
 
-# ================= 3. 界面配置与侧边栏 =================
+# ================= 3. 界面配置与侧边栏 (安全升级区) =================
 
 st.set_page_config(page_title="品名识别生成工具", layout="wide")
 
 with st.sidebar:
     st.header("⚙️ 引擎配置")
+    
+    # 1. 默默在后台获取系统保密的 Key，绝对不传给前端
     secret_key = st.secrets.get("GEMINI_API_KEY", "")
-    api_key = st.text_input("Gemini API Key", value=secret_key, type="password")
-    if not api_key:
-        st.warning("👈 请输入 API Key 以启动系统")
+    
+    # 2. 前端输入框彻底留空！只作为“备用”或者“临时替换”的入口
+    manual_key = st.text_input("备用 API Key (可选)", value="", type="password", help="默认使用系统内部隐藏密钥。若需临时替换，可在此输入。")
+    
+    # 3. 逻辑判断：优先使用手动输入的，没输入就用系统后台的
+    final_api_key = manual_key if manual_key else secret_key
+    
+    if not final_api_key:
+        st.warning("👈 系统未配置 API Key，请联系管理员。")
         st.stop()
-    genai.configure(api_key=api_key)
-    st.success("✅ 极速引擎已就绪")
+        
+    genai.configure(api_key=final_api_key)
+    st.success("✅ 极速引擎已在后台就绪 (密钥已隐藏)")
 
 # ================= 4. 主界面 (测款识图) =================
 
@@ -84,7 +93,6 @@ if files:
             with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
                 st.image(img_bytes, use_column_width=True)
                 
-            # 💡 核心优化：让 AI 寻找平衡感，体现客观卖点，拒绝同义词堆砌
             prompt_full = """
             任务：分析图片，为该商品生成一套完整的Coupang上架信息。
             
@@ -243,7 +251,6 @@ if st.session_state.extractions:
                     
         with t_btn_title:
             if st.button("🔄 换一个标题", key=f"btn_title_{idx}", use_container_width=True):
-                # 💡 单独重抽标题时，也应用平衡法则
                 prompt_title = """
                 任务：为该商品生成一套【全新】的Coupang前台销售标题（含中文翻译）。
                 要求：
