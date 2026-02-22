@@ -94,13 +94,10 @@ def process_lxu_long_image(uploaded_file, prompt):
             f.write(uploaded_file.getbuffer())
 
         gen_file = genai.upload_file(path=temp_name)
-        
-        # 不再使用全屏 status，改用更轻量的 spinner
         response = model.generate_content([gen_file, prompt])
         
         if os.path.exists(temp_name):
             os.remove(temp_name)
-            
         return response.text
     except Exception as e:
         return f"❌ 引擎执行出错: {str(e)}"
@@ -128,26 +125,22 @@ def make_label_50x30(sku, title, spec):
     draw.text((200, 70), spec, fill='black', font=load_font(24), anchor="mm")
     draw.text((200, 190), sku, fill='black', font=load_font(22), anchor="mm")
     draw.text((200, 220), "MADE IN CHINA", fill='black', font=load_font(22), anchor="mm")
-    
     return img
 
 # ================= 5. 主交互界面 =================
-
 st.title("⚡ LxU 测款指挥舱")
+st.info("💡 **效率提示**：微信截图后，在网页任意空白处点一下按 `Ctrl+V` 即可！图片会自动进入折叠菜单。")
 
-st.info("💡 **效率秘籍**：请先使用微信截图。然后在当前网页的**任意空白处**点一下鼠标，直接按键盘 `Ctrl+V`，无需按回车即可极速提取！", icon="🚀")
-
-# 隐藏了边框的 uploader，专门用来接管全局粘贴
-files = st.file_uploader("📥 [全局粘贴区] 支持直接拖拽或 Ctrl+V 粘贴图片", type=["png", "jpg", "jpeg", "webp", "pdf"], accept_multiple_files=True)
+# 全局粘贴接管区
+files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp", "pdf"], accept_multiple_files=True)
 
 if files:
-    with st.chat_message("user"):
-        cols = st.columns(min(len(files), 4))
-        for idx, f in enumerate(files):
-            cols[idx % 4].image(f, caption=f.name, use_column_width=True)
+    for f in files:
+        # 💡 核心升级：使用 expander 将图片预览折叠起来
+        with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
+            st.image(f, use_column_width=True)
             
-    with st.chat_message("assistant"):
-        for f in files:
+        with st.chat_message("assistant"):
             prompt = """
             任务：极简模式测款提取。
             请直接分析产品图，**必须严格按照以下 JSON 格式输出结果**。
@@ -169,13 +162,14 @@ if files:
               "name_kr": "LxU [对应的韩文品名]"
             }
             """
-            with st.spinner(f"⚡ 正在深度扫描核心商品词..."):
+            with st.spinner(f"⚡ 正在分析 {f.name} ..."):
                 res_text = process_lxu_long_image(f, prompt)
             
             try:
                 json_str = res_text.replace("```json", "").replace("```", "").strip()
                 data = json.loads(json_str)
                 
+                st.markdown(f"### 📦 {f.name} 测品提取结果")
                 st.markdown("##### 🔍 前台精准竞品搜索词")
                 for i, item in enumerate(data.get('keywords', [])):
                     c1, c2, c3 = st.columns([0.5, 6, 4])
@@ -185,7 +179,6 @@ if files:
                     c3.markdown(f"<div style='padding-top:12px; color:#666;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
-                
                 st.markdown("##### 🏷️ 内部管理品名")
                 nc1, nc2 = st.columns([1, 9])
                 nc1.markdown("<div style='padding-top:12px; color:#555;'>CN 中文</div>", unsafe_allow_html=True)
@@ -200,5 +193,4 @@ if files:
             except Exception as parse_err:
                 st.error("解析数据结构失败，原始返回如下：")
                 st.markdown(res_text)
-                
             st.divider()
