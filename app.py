@@ -3,150 +3,134 @@ import google.generativeai as genai
 from PIL import Image, ImageDraw, ImageFont
 import barcode
 from barcode.writer import ImageWriter
-import pdfplumber
 import io
 import os
 import time
 
-# ================= 1. 页面配置 =================
-st.set_page_config(page_title="LxU 电商 AI 助手-稳定版", page_icon="🚀", layout="wide")
-st.title("LxU 专属电商工具集 (Flash 稳定版)")
+# ================= 1. 页面配置与 Secrets =================
+st.set_page_config(page_title="LxU 专属电商工具集-极速版", page_icon="🚀", layout="wide")
+st.title("LxU 专属电商工具集 (基于旗舰级 Flash 引擎)")
+
+# 从 Secrets 获取 Key
+api_key = st.secrets.get("GEMINI_API_KEY", "")
+
+if not api_key:
+    st.error("⚠️ 未在后台检测到 GEMINI_API_KEY，请在 Settings -> Secrets 配置。")
+    st.stop()
+
+# 全局配置模型 (参考成功代码的初始化逻辑)
+genai.configure(api_key=api_key)
 
 # 初始化 Session State
-state_keys = ['keywords_res', 'trans_res', 'label_img', 'last_sku']
-for key in state_keys:
-    if key not in st.session_state:
-        st.session_state[key] = "" if 'img' not in key else None
+if 'keywords_res' not in st.session_state: st.session_state.keywords_res = ""
+if 'label_img' not in st.session_state: st.session_state.label_img = None
 
-# ================= 2. 侧边栏 API 配置 =================
-with st.sidebar:
-    st.header("⚙️ 引擎配置")
-    # 优先调用 Secrets 中的 Key，模仿你成功的代码环境
-    sc_key = st.secrets.get("GEMINI_API_KEY", "")
-    api_key = st.text_input("Gemini API Key", value=sc_key, type="password")
-    st.info("模式：服务器端文件轮询流 (针对超长详情页优化)")
-    st.divider()
-    st.markdown("### 🏷️ 标签规范\n- 尺寸: 50x30mm\n- 包含: MADE IN CHINA")
+# ================= 2. 核心读取逻辑 (复刻成功代码) =================
 
-# ================= 3. 核心工具函数 =================
-
-def process_file_and_call_gemini(prompt, uploaded_file, key):
-    """【核心修复】：完全对齐成功代码的上传与调用逻辑"""
-    if not key:
-        st.error("请在左侧配置 API Key！")
-        return None
-    
-    # 1. 配置 API
-    genai.configure(api_key=key)
-    
-    # 2. 模型初始化 (参考你成功的代码：使用 system_instruction)
+def process_long_image_stable(uploaded_file, prompt):
+    """
+    完全复刻“终极稳定版”中的长图读取流：
+    保存临时文件 -> 异步上传 -> 状态轮询 -> 生成内容
+    """
     try:
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash", 
-            system_instruction="你是一个精通韩国 Coupang 运营的 SEO 专家，品牌名为 LxU。"
-        )
-
-        # 3. 临时保存文件
+        # 使用你成功代码中的模型版本
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        # 1. 保存临时文件
         temp_path = f"temp_{int(time.time())}_{uploaded_file.name}"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # 4. 上传至 Google 服务器
+        # 2. 调用 upload_file 异步接口
         gen_file = genai.upload_file(path=temp_path)
         
-        # 5. 状态轮询 (这是解决 404/Processing 的关键)
-        with st.status("正在上传并极速扫描长图...", expanded=False) as status:
+        # 3. 核心轮询：等待 Google 服务器处理长图
+        with st.status(f"⚡ 正在异步解析长图：{uploaded_file.name}", expanded=False) as status:
             while gen_file.state.name == "PROCESSING":
                 time.sleep(2)
                 gen_file = genai.get_file(gen_file.name)
-            status.update(label="解析完成，正在提炼文案...", state="complete")
+            status.update(label="✅ 图片解析完成，正在提炼关键词...", state="complete")
         
-        # 6. 生成内容 (注意：这里使用你成功的两参数调用方式)
+        # 4. 生成响应
         response = model.generate_content([gen_file, prompt])
         
-        # 7. 清理临时文件
+        # 5. 清理现场
         if os.path.exists(temp_path):
             os.remove(temp_path)
             
         return response.text
     except Exception as e:
-        st.error(f"处理失败: {str(e)}")
-        return None
+        return f"❌ 深度读取失败: {str(e)}"
 
-def generate_label_50x30(code, title, option):
-    """标准 50x30mm 标签绘制"""
-    width, height = 400, 240 # 203 DPI
+# ================= 3. 标签生成逻辑 (LxU 50x30mm 规范) =================
+
+def generate_label_50x30(sku, title, spec):
+    """绘制 50x30mm 标准标签图，底部带 MADE IN CHINA"""
+    # 203 DPI 下 50x30mm 约 400x240 像素
+    width, height = 400, 240
     img = Image.new('RGB', (width, height), 'white')
     draw = ImageDraw.Draw(img)
     
-    # 条码生成
+    # 条码绘制
     try:
-        code128 = barcode.get('code128', code, writer=ImageWriter())
+        code128 = barcode.get('code128', sku, writer=ImageWriter())
         barcode_buffer = io.BytesIO()
         code128.write(barcode_buffer, options={"module_height": 10.0, "font_size": 1, "text_distance": 1})
         barcode_img = Image.open(barcode_buffer).resize((360, 95))
         img.paste(barcode_img, (20, 85))
     except: pass
 
-    # 字体加载
-    def get_f(s):
-        ps = ["/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", "C:/Windows/Fonts/msyh.ttc", "Arial.ttf"]
-        for p in ps:
-            if os.path.exists(p): return ImageFont.truetype(p, s)
+    # 字体配置
+    def load_f(size):
+        paths = ["/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", "C:/Windows/Fonts/msyh.ttc", "Arial.ttf"]
+        for p in paths:
+            if os.path.exists(p): return ImageFont.truetype(p, size)
         return ImageFont.load_default()
 
-    draw.text((200, 35), title, fill='black', font=get_f(28), anchor="mm")
-    draw.text((200, 70), option, fill='black', font=get_f(24), anchor="mm")
-    draw.text((200, 190), code, fill='black', font=get_f(22), anchor="mm")
-    draw.text((200, 220), "MADE IN CHINA", fill='black', font=get_f(22), anchor="mm")
+    # 文本内容
+    draw.text((200, 35), title, fill='black', font=load_f(28), anchor="mm")
+    draw.text((200, 70), spec, fill='black', font=load_f(24), anchor="mm")
+    draw.text((200, 190), sku, fill='black', font=load_f(22), anchor="mm")
+    # 底部固定标识
+    draw.text((200, 220), "MADE IN CHINA", fill='black', font=load_f(22), anchor="mm")
+    
     return img
 
-# ================= 4. UI 布局 =================
+# ================= 4. UI 界面逻辑 =================
 
-t1, t2, t3 = st.tabs(["📑 智能提词(旗舰版)", "🇰🇷 本土化翻译", "🏷️ 50x30 标签生成"])
+tab1, tab2 = st.tabs(["📑 智能提词与详情页分析", "🏷️ 50x30 标签生成"])
 
-with t1:
-    st.subheader("分析详情页 (支持超长图片/PDF)")
-    up_f1 = st.file_uploader("上传截图", type=["png", "jpg", "jpeg", "pdf"], key="u1")
-    if st.button("生成 LxU 提词方案", type="primary"):
-        if up_f1:
-            prompt = "请帮我分析该产品，找到符合韩国搜索习惯的3个核心韩文关键词，并生成一个以LxU开头的韩文标题。直接输出结果。"
-            st.session_state.keywords_res = process_file_and_call_gemini(prompt, up_f1, api_key)
-
-    if st.session_state.keywords_res:
-        st.markdown(st.session_state.keywords_res)
-
-with t2:
-    st.subheader("营销级本土化翻译")
-    cola, colb = st.columns(2)
-    t_in = cola.text_area("文案输入")
-    i_in = colb.file_uploader("截图输入", type=["png", "jpg", "jpeg"])
+with tab1:
+    st.subheader("长图详情页提炼 (复刻稳定版引擎)")
+    files = st.file_uploader("上传详情页截图 (支持长图)", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
     
-    if st.button("开始本土翻译"):
-        prompt = "你是一个韩国本土电商专家，请将内容翻译/润色为极具促单感的韩文营销文案。直接输出。"
-        if i_in:
-            st.session_state.trans_res = process_file_and_call_gemini(prompt + f"\n参考文案: {t_in}", i_in, api_key)
-        else:
-            genai.configure(api_key=api_key)
-            m = genai.GenerativeModel('gemini-1.5-flash')
-            st.session_state.trans_res = m.generate_content(prompt + t_in).text
+    if files and st.button("🚀 开始批量解析", type="primary"):
+        for f in files:
+            # 整合你最核心的 7 大维度指令
+            prompt = """
+            你是一个韩国Coupang SEO专家。请分析该详情页：
+            1. 挖掘20个韩文精准关键词，并提供逗号隔开的代码块版本。
+            2. 生成1个以LxU开头的韩文高点击标题。
+            3. 提供产品韩语名称。
+            所有解释文字用中文。
+            """
+            res = process_long_image_stable(f, prompt)
+            st.markdown(f"### 📊 产品：{f.name} 的分析结果")
+            st.markdown(res)
+            st.divider()
 
-    if st.session_state.trans_res:
-        st.text_area("结果", st.session_state.trans_res, height=200)
-
-with t3:
-    st.subheader("50x30mm 标签生成")
+with tab2:
+    st.subheader("50x30mm 货品标签生成器")
     c1, c2, c3 = st.columns(3)
-    sk = c1.text_input("条码数字", "880123456789")
-    ti = c2.text_input("产品标题", "LxU Product")
-    op = c3.text_input("规格", "Size: L | Color: White")
+    val_sku = c1.text_input("SKU/条码", "880123456789")
+    val_title = c2.text_input("产品标题", "LxU Brand Product")
+    val_spec = c3.text_input("规格选项", "Model: Banana | Size: XL")
     
-    if st.button("生成标签"):
-        st.session_state.label_img = generate_label_50x30(sk, ti, op)
-        st.session_state.last_sku = sk
+    if st.button("预览并生成标签"):
+        st.session_state.label_img = generate_label_50x30(val_sku, val_title, val_spec)
         
     if st.session_state.label_img:
         st.image(st.session_state.label_img, width=400)
-        b = io.BytesIO()
-        st.session_state.label_img.save(b, format="PNG")
-        st.download_button("📥 下载标签", b.getvalue(), f"LxU_{st.session_state.last_sku}.png")
+        buf = io.BytesIO()
+        st.session_state.label_img.save(buf, format="PNG")
+        st.download_button("💾 下载标签图", buf.getvalue(), f"LxU_Label_{val_sku}.png")
