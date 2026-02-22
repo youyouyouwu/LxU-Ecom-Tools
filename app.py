@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import google.generativeai as genai
 from PIL import Image, ImageDraw, ImageFont
 import barcode
@@ -6,11 +7,11 @@ from barcode.writer import ImageWriter
 import io
 import os
 import time
-import json # 💡 引入原生的 json 库进行数据解析
+import json
 
 # ================= 1. 页面配置与引擎设置 =================
 st.set_page_config(page_title="LxU 极简测款助手", layout="wide")
-st.title("⚡ LxU 极简测款助手 (一键复制版)")
+st.title("⚡ LxU 极简测款助手 (专属一键复制版)")
 
 with st.sidebar:
     st.header("⚙️ 引擎配置")
@@ -26,10 +27,53 @@ genai.configure(api_key=api_key)
 
 if 'label_img' not in st.session_state: st.session_state.label_img = None
 
-# ================= 2. 极简识图引擎 =================
+# ================= 2. 独立定制的一键复制组件 =================
+def render_copy_button(text):
+    """手写的前端 HTML+JS 复制组件，点击反馈丝滑，无需刷新页面"""
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        body {{ margin: 0; padding: 2px; font-family: "Microsoft YaHei", sans-serif; }}
+        .container {{ display: flex; align-items: center; }}
+        .text-box {{ flex-grow: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 4px; background-color: #f9fafb; color: #111827; font-size: 14px; outline: none; margin-right: 10px; width: 100%; box-sizing: border-box; }}
+        .copy-btn {{ padding: 8px 15px; background-color: #ffffff; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; color: #374151; font-size: 13px; font-weight: bold; min-width: 90px; transition: all 0.2s; white-space: nowrap; box-sizing: border-box; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
+        .copy-btn:hover {{ background-color: #f3f4f6; }}
+    </style>
+    </head>
+    <body>
+    <div class="container">
+        <input type="text" value="{text}" id="inputBox" class="text-box" readonly>
+        <button onclick="copyText()" id="copyBtn" class="copy-btn">复制</button>
+    </div>
+    <script>
+    function copyText() {{
+        var copyText = document.getElementById("inputBox");
+        copyText.select();
+        document.execCommand("copy"); // 兼容性最强的浏览器复制命令
+        var btn = document.getElementById("copyBtn");
+        btn.innerText = "✅ 复制成功";
+        btn.style.backgroundColor = "#dcfce7";
+        btn.style.borderColor = "#86efac";
+        btn.style.color = "#166534";
+        setTimeout(function(){{
+            btn.innerText = "复制";
+            btn.style.backgroundColor = "#ffffff";
+            btn.style.borderColor = "#d1d5db";
+            btn.style.color = "#374151";
+        }}, 2000); // 2秒后恢复原状
+    }}
+    </script>
+    </body>
+    </html>
+    """
+    # 渲染高度定为 45 像素，完美融合进 Streamlit 的布局
+    components.html(html_code, height=45)
+
+# ================= 3. 极简识图引擎 =================
 
 def process_lxu_long_image(uploaded_file, prompt):
-    """异步长图解析，要求强制输出 JSON"""
     try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-flash", 
@@ -57,7 +101,7 @@ def process_lxu_long_image(uploaded_file, prompt):
     except Exception as e:
         return f"❌ 引擎执行出错: {str(e)}"
 
-# ================= 3. 标签绘制逻辑 (50x30mm) =================
+# ================= 4. 标签绘制逻辑 (50x30mm) =================
 
 def make_label_50x30(sku, title, spec):
     width, height = 400, 240 
@@ -85,17 +129,16 @@ def make_label_50x30(sku, title, spec):
     
     return img
 
-# ================= 4. 前端交互界面 =================
+# ================= 5. 前端交互界面 =================
 
 tab1, tab2 = st.tabs(["🎯 极简测款提词", "🏷️ 50x30 标签生成"])
 
 with tab1:
-    st.subheader("核心竞品词与内部品名提取 (支持一键复制)")
+    st.subheader("核心竞品词与内部品名提取 (带点击反馈复制)")
     files = st.file_uploader("上传测款图片", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
     
     if files and st.button("🚀 极速提取核心信息", type="primary"):
         for f in files:
-            # 💡 核心修改：让大模型直接输出纯粹的 JSON 格式
             prompt = """
             任务：极简模式测款提取。
             请直接分析产品图，**必须严格按照以下 JSON 格式输出结果**。
@@ -118,35 +161,37 @@ with tab1:
             st.markdown(f"### 📦 提取结果：{f.name}")
             
             try:
-                # 清理大模型可能带有的 markdown 代码块包裹符号
                 json_str = res_text.replace("```json", "").replace("```", "").strip()
                 data = json.loads(json_str)
                 
                 # --- 渲染搜索词列表 ---
                 st.markdown("#### 🔍 前台竞品搜索词")
-                hc1, hc2, hc3 = st.columns([1, 4, 4])
-                hc1.markdown("**序号**")
-                hc2.markdown("**韩文搜索词 (鼠标移上点击图标复制)**")
-                hc3.markdown("**中文解释**")
+                hc1, hc2, hc3 = st.columns([1, 5, 4])
+                hc1.markdown("<div style='padding-top:10px;'>**序号**</div>", unsafe_allow_html=True)
+                hc2.markdown("<div style='padding-top:10px;'>**韩文搜索词 (点右侧按钮提取)**</div>", unsafe_allow_html=True)
+                hc3.markdown("<div style='padding-top:10px;'>**中文解释**</div>", unsafe_allow_html=True)
                 
                 for i, item in enumerate(data.get('keywords', [])):
-                    c1, c2, c3 = st.columns([1, 4, 4])
-                    c1.markdown(f"**{i+1}**")
-                    # 使用 st.code 渲染，自带一键复制按钮
-                    c2.code(item.get('kr', ''), language="text")
-                    c3.markdown(item.get('cn', ''))
+                    c1, c2, c3 = st.columns([1, 5, 4])
+                    c1.markdown(f"<div style='padding-top:12px;'>**{i+1}**</div>", unsafe_allow_html=True)
+                    # 💡 调用原生手写组件渲染带常驻按钮的输入框
+                    with c2:
+                        render_copy_button(item.get('kr', ''))
+                    c3.markdown(f"<div style='padding-top:12px; color:#4b5563;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # --- 渲染品名 ---
+                # --- 渲染内部品名 ---
                 st.markdown("#### 🏷️ 内部管理品名")
-                nc1, nc2 = st.columns([2, 8])
-                nc1.markdown("🇨🇳 **中文**")
-                nc2.code(data.get('name_cn', ''), language="text")
+                nc1, nc2 = st.columns([1, 9])
+                nc1.markdown("<div style='padding-top:12px;'>🇨🇳 **中文**</div>", unsafe_allow_html=True)
+                with nc2:
+                    render_copy_button(data.get('name_cn', ''))
                 
-                kc1, kc2 = st.columns([2, 8])
-                kc1.markdown("🇰🇷 **韩文**")
-                kc2.code(data.get('name_kr', ''), language="text")
+                kc1, kc2 = st.columns([1, 9])
+                kc1.markdown("<div style='padding-top:12px;'>🇰🇷 **韩文**</div>", unsafe_allow_html=True)
+                with kc2:
+                    render_copy_button(data.get('name_kr', ''))
                 
             except Exception as parse_err:
                 st.error("解析数据结构失败，原始返回如下：")
@@ -154,7 +199,7 @@ with tab1:
                 
             st.divider()
         
-        st.success("✅ 所有图片解析完毕！请将鼠标移至虚线框右上角点击复制。")
+        st.success("✅ 所有图片解析完毕！")
 
 with tab2:
     st.subheader("50x30mm 标准货品标签")
