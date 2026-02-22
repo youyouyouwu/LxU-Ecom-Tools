@@ -71,9 +71,8 @@ with st.sidebar:
 
 # ================= 4. 主界面 (测款识图) =================
 
-# 💡 标题和图标已按要求更新
 st.title("🔎 品名识别生成工具")
-st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。已为您强制屏蔽泛流量词，专攻精准实物名词！")
+st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。已为您强制屏蔽泛流量词。刷新后可无限【撤销返回】，0秒切换无压力！")
 
 files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
@@ -103,23 +102,41 @@ if files:
                 try:
                     json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                     data = json.loads(json_str)
-                    new_exts.append({"file": f.name, "bytes": img_bytes, "data": data})
+                    # 💡 核心新增：为每个图片建立独立的关键词和品名“记忆历史栈”
+                    new_exts.append({
+                        "file": f.name, 
+                        "bytes": img_bytes, 
+                        "data": data,
+                        "kw_history": [],     # 关键词历史库
+                        "name_history": []    # 品名历史库
+                    })
                 except Exception:
                     st.error(f"解析失败。原始内容：\n{res_text}")
         
         st.session_state.extractions = new_exts
 
-# ================= 5. 渲染结果区 (带彻底修复的独立刷新) =================
+# ================= 5. 渲染结果区 (带独立刷新 + 撤销返回) =================
 
 if st.session_state.extractions:
     for idx, item in enumerate(st.session_state.extractions):
         st.write("---")
         
         # ---------------- A. 关键词区域 ----------------
-        c_title, c_btn = st.columns([8, 2])
+        # 布局改为 3 列，给撤销按钮留出位置
+        c_title, c_undo_kw, c_btn_kw = st.columns([6, 2, 2])
         with c_title:
             st.markdown(f"### 📦 {item['file']} 识别结果")
-        with c_btn:
+            
+        with c_undo_kw:
+            # 💡 如果历史库里有数据，才显示“撤销”按钮
+            if item.get('kw_history'):
+                if st.button("⏪ 撤销返回", key=f"undo_kw_{idx}", use_container_width=True):
+                    # 从历史库中弹出上一版数据，覆盖当前数据，瞬间刷新页面
+                    prev_kw = st.session_state.extractions[idx]['kw_history'].pop()
+                    st.session_state.extractions[idx]['data']['keywords'] = prev_kw
+                    st.rerun()
+                    
+        with c_btn_kw:
             if st.button("🔄 换一批搜索词", key=f"btn_kw_{idx}", use_container_width=True):
                 prompt_kw = """
                 任务：重新分析图片，提取5个【完全不同于之前】的韩文搜索词。
@@ -133,15 +150,21 @@ if st.session_state.extractions:
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                         new_kw_data = json.loads(json_str)
+                        
+                        # 💡 核心：在更新前，把【当前数据】塞进记忆历史栈
+                        current_kw = st.session_state.extractions[idx]['data'].get('keywords', [])
+                        st.session_state.extractions[idx]['kw_history'].append(current_kw)
+                        
+                        # 更新为新数据
                         st.session_state.extractions[idx]['data']['keywords'] = new_kw_data.get('keywords', [])
-                        success = True # 💡 标记解析成功
+                        success = True
                     except Exception:
                         st.error("重抽失败，大模型返回格式有误，请再试一次。")
                 
-                # 💡 将刷新命令彻底移出 Try-Except，彻底解决报错闪烁 Bug
                 if success:
                     st.rerun()
 
+        # 渲染关键词列表
         for i, kw in enumerate(item['data'].get('keywords', [])):
             c1, c2, c3 = st.columns([0.5, 6, 4])
             c1.markdown(f"**{i+1}**")
@@ -151,10 +174,20 @@ if st.session_state.extractions:
         st.markdown("<br>", unsafe_allow_html=True)
         
         # ---------------- B. 内部品名区域 ----------------
-        n_title, n_btn = st.columns([8, 2])
+        n_title, n_undo_name, n_btn_name = st.columns([6, 2, 2])
         with n_title:
             st.markdown("##### 🏷️ 内部实体管理品名")
-        with n_btn:
+            
+        with n_undo_name:
+            # 💡 品名的独立撤销功能
+            if item.get('name_history'):
+                if st.button("⏪ 撤销返回", key=f"undo_name_{idx}", use_container_width=True):
+                    prev_name = st.session_state.extractions[idx]['name_history'].pop()
+                    st.session_state.extractions[idx]['data']['name_cn'] = prev_name['name_cn']
+                    st.session_state.extractions[idx]['data']['name_kr'] = prev_name['name_kr']
+                    st.rerun()
+                    
+        with n_btn_name:
             if st.button("🔄 换一个品名", key=f"btn_name_{idx}", use_container_width=True):
                 prompt_name = """
                 任务：重新分析图片，为该商品生成一个【全新】的 LxU 品牌内部管理品名。
@@ -167,16 +200,25 @@ if st.session_state.extractions:
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                         new_name_data = json.loads(json_str)
+                        
+                        # 💡 核心：在更新前，把【当前名字】塞进记忆历史栈
+                        current_name = {
+                            "name_cn": st.session_state.extractions[idx]['data'].get('name_cn', ''),
+                            "name_kr": st.session_state.extractions[idx]['data'].get('name_kr', '')
+                        }
+                        st.session_state.extractions[idx]['name_history'].append(current_name)
+                        
+                        # 更新为新名字
                         st.session_state.extractions[idx]['data']['name_cn'] = new_name_data.get('name_cn', '')
                         st.session_state.extractions[idx]['data']['name_kr'] = new_name_data.get('name_kr', '')
-                        success = True # 💡 标记解析成功
+                        success = True
                     except Exception:
                         st.error("重命名失败，请再试一次。")
                 
-                # 💡 只有确保数据安全存入，才触发无缝刷新
                 if success:
                     st.rerun()
 
+        # 渲染内部品名
         nc1, nc2 = st.columns([1, 9])
         nc1.write("CN 中文")
         with nc2: render_copy_button(item['data'].get('name_cn', ''), f"name_cn_{idx}")
