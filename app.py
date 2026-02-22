@@ -4,6 +4,8 @@ import requests
 import json
 import pdfplumber
 import io
+import base64
+import urllib.parse
 
 # ================= 1. 页面配置与全局状态 =================
 st.set_page_config(page_title="LxU 专属电商工具集", page_icon="🛠️", layout="wide")
@@ -24,6 +26,14 @@ with st.sidebar:
 
 # ================= 3. 核心函数定义 =================
 
+# 获取百度 API 的 Access Token (全局通用)
+def get_access_token(ak, sk):
+    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={ak}&client_secret={sk}"
+    payload = ""
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    response = requests.request("POST", url, headers=headers, data=payload)
+    return response.json().get("access_token")
+
 # 提取 PDF 文本
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -34,15 +44,27 @@ def extract_text_from_pdf(pdf_file):
                 text += page_text + "\n"
     return text
 
-# 获取百度 API 的 Access Token
-def get_access_token(ak, sk):
-    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={ak}&client_secret={sk}"
-    payload = ""
-    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+# 提取 图片 文本 (调用百度 OCR)
+def extract_text_from_image(image_bytes, token):
+    url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token={token}"
+    # 图片需要 base64 编码后再 urlencode
+    img_b64 = base64.b64encode(image_bytes).decode()
+    payload = f"image={urllib.parse.quote(img_b64)}"
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+    }
     response = requests.request("POST", url, headers=headers, data=payload)
-    return response.json().get("access_token")
+    result = response.json()
+    
+    if "words_result" in result:
+        # 将识别出的每一行文字拼接到一起
+        extracted_text = "\n".join([item["words"] for item in result["words_result"]])
+        return extracted_text
+    else:
+        return ""
 
-# 调用文心一言大模型
+# 调用文心一言大模型生成标题和关键词
 def call_wenxin_api(text, token):
     url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-lite-8k?access_token={token}"
     
@@ -64,49 +86,59 @@ def call_wenxin_api(text, token):
     return response.json().get("result", "API 请求失败或解析错误")
 
 # ================= 4. UI 布局与交互 =================
-tab1, tab2, tab3 = st.tabs(["📑 PDF智能提词与标题", "🇰🇷 营销级本土翻译", "🏷️ 标签与条码生成"])
+tab1, tab2, tab3 = st.tabs(["📑 智能提词与标题", "🇰🇷 营销级本土翻译", "🏷️ 标签与条码生成"])
 
-# --- 功能一：PDF提词与 Coupang 标题生成 ---
+# --- 功能一：详情页提词与 Coupang 标题生成 ---
 with tab1:
-    st.subheader("分析详情页生成核心词与标题")
-    uploaded_pdf = st.file_uploader("上传产品详情页PDF", type="pdf", key="pdf_uploader")
+    st.subheader("分析产品详情页 (支持 PDF/图片)")
+    # 【升级】支持了常见图片格式
+    uploaded_file = st.file_uploader("上传产品详情页 (PDF / PNG / JPG)", type=["pdf", "png", "jpg", "jpeg"], key="file_uploader")
     
     if st.button("开始提取与生成", type="primary"):
         if not api_key or not secret_key:
             st.error("请先在左侧边栏输入 API Key 和 Secret Key！")
-        elif uploaded_pdf is not None:
-            with st.spinner("正在提取PDF文本并调用文心一言大模型分析..."):
+        elif uploaded_file is not None:
+            with st.spinner("正在提取文字并调用大模型分析... (图片OCR可能需要几秒钟)"):
                 try:
-                    # 1. 提取文本
-                    pdf_text = extract_text_from_pdf(uploaded_pdf)
-                    if not pdf_text.strip():
-                        st.warning("未能从PDF中提取到文字，可能是纯图片PDF，请检查文件。")
+                    # 1. 获取 Token (优先获取，因为 OCR 和大模型都要用)
+                    token = get_access_token(api_key, secret_key)
+                    if not token:
+                        st.error("获取 Access Token 失败，请检查 API Key 和 Secret Key 是否正确。")
+                        st.stop()
+                    
+                    # 2. 根据文件类型分流提取文字
+                    extracted_text = ""
+                    file_type = uploaded_file.name.split('.')[-1].lower()
+                    
+                    if file_type == "pdf":
+                        extracted_text = extract_text_from_pdf(uploaded_file)
+                    elif file_type in ["png", "jpg", "jpeg"]:
+                        image_bytes = uploaded_file.read()
+                        extracted_text = extract_text_from_image(image_bytes, token)
+                        
+                    # 3. 检查是否成功提取到文字
+                    if not extracted_text.strip():
+                        st.warning("未能从文件中提取到文字。如果是图片，请确保图片内包含清晰的文字。")
                     else:
-                        # 2. 获取 Token
-                        token = get_access_token(api_key, secret_key)
-                        if token:
-                            # 3. 调用 API 获取结果
-                            ai_result = call_wenxin_api(pdf_text, token)
-                            
-                            # 4. 简单解析返回的结果并存入 session_state
-                            if "核心词：" in ai_result and "标题：" in ai_result:
-                                parts = ai_result.split("标题：")
-                                st.session_state.pdf_keywords = parts[0].replace("核心词：", "").strip()
-                                st.session_state.pdf_title = parts[1].strip()
-                            else:
-                                # 如果格式未按预期返回，则全部塞入标题框展示
-                                st.session_state.pdf_keywords = "未严格按格式返回，请看下方完整内容"
-                                st.session_state.pdf_title = ai_result
-                                
-                            st.success("✅ 分析完成")
+                        # 4. 调用 API 获取结果
+                        ai_result = call_wenxin_api(extracted_text, token)
+                        
+                        # 5. 解析返回结果
+                        if "核心词：" in ai_result and "标题：" in ai_result:
+                            parts = ai_result.split("标题：")
+                            st.session_state.pdf_keywords = parts[0].replace("核心词：", "").strip()
+                            st.session_state.pdf_title = parts[1].strip()
                         else:
-                            st.error("获取 Access Token 失败，请检查 API Key 和 Secret Key 是否正确。")
+                            st.session_state.pdf_keywords = "未严格按格式返回，请看下方完整内容"
+                            st.session_state.pdf_title = ai_result
+                            
+                        st.success("✅ 分析完成！")
                 except Exception as e:
                     st.error(f"发生错误: {e}")
         else:
-            st.warning("请先上传 PDF 文件！")
+            st.warning("请先上传文件！")
             
-    # 展示结果（因为存在 session_state 中，切换 Tab 不会消失）
+    # 展示结果
     if st.session_state.pdf_keywords or st.session_state.pdf_title:
         st.text_area("核心关键词 (Top 3) - 点击即可复制去搜索竞品", value=st.session_state.pdf_keywords, height=68)
         st.text_area("Coupang 专属标题 - 品牌前置优化", value=st.session_state.pdf_title, height=68)
