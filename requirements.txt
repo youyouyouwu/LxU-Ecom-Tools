@@ -1,5 +1,4 @@
-streamlit==1.31.0
+streamlit>=1.40.0
 google-generativeai
-pdfplumber
-Pillow
+pillow
 python-barcode
