@@ -137,18 +137,23 @@ with tab1:
     
     if files and st.button("🚀 极速提取核心信息", type="primary"):
         for f in files:
+            # 💡 核心修改：在 Prompt 中下达死命令，强制要求商品名词，封杀形容词和功能词
             prompt = """
             任务：极简模式测款提取。
             请直接分析产品图，**必须严格按照以下 JSON 格式输出结果**。
             严禁输出任何废话、Markdown 表格或解释文字，只能输出纯 JSON 代码：
             
+            ⚠️ 【极其重要的搜索词提取规则】：
+            提取的 5 个韩文搜索词【必须是韩国买家在 Coupang 真实搜索时使用的具体商品名词】（例如：胎压监测帽、汽车气门嘴盖、轮胎压力测试盖）。
+            【严禁】输出任何缺乏购物意图的形容词、功能描述或泛泛之词（绝对禁止出现类似于“三色显示”、“实时检测”、“汽车安全用品”这类非商品名词）。所有的词都必须能直接拿到前台精准搜出该类目商品！
+            
             {
               "keywords": [
-                {"kr": "韩文搜索词1", "cn": "中文翻译1"},
-                {"kr": "韩文搜索词2", "cn": "中文翻译2"},
-                {"kr": "韩文搜索词3", "cn": "中文翻译3"},
-                {"kr": "韩文搜索词4", "cn": "中文翻译4"},
-                {"kr": "韩文搜索词5", "cn": "中文翻译5"}
+                {"kr": "精准商品名词1", "cn": "中文翻译1"},
+                {"kr": "精准商品名词2", "cn": "中文翻译2"},
+                {"kr": "精准商品名词3", "cn": "中文翻译3"},
+                {"kr": "精准商品名词4", "cn": "中文翻译4"},
+                {"kr": "精准商品名词5", "cn": "中文翻译5"}
               ],
               "name_cn": "LxU [简短精准的中文品名]",
               "name_kr": "LxU [对应的韩文品名]"
@@ -162,12 +167,10 @@ with tab1:
                 json_str = res_text.replace("```json", "").replace("```", "").strip()
                 data = json.loads(json_str)
                 
-                # --- 渲染搜索词列表 (去除表头，直接跟中文) ---
-                st.markdown("#### 🔍 前台竞品搜索词")
+                st.markdown("#### 🔍 前台精准竞品搜索词")
                 
                 for i, item in enumerate(data.get('keywords', [])):
                     c1, c2, c3 = st.columns([0.5, 6, 4])
-                    # 使用 CSS 控制字体样式，彻底告别 Markdown 星号
                     c1.markdown(f"<div style='padding-top:12px; font-weight:bold; color:#555;'>{i+1}</div>", unsafe_allow_html=True)
                     with c2:
                         render_copy_button(item.get('kr', ''))
@@ -175,7 +178,6 @@ with tab1:
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # --- 渲染内部品名 (去除星号) ---
                 st.markdown("#### 🏷️ 内部管理品名")
                 nc1, nc2 = st.columns([1, 9])
                 nc1.markdown("<div style='padding-top:12px; color:#555;'>CN 中文</div>", unsafe_allow_html=True)
