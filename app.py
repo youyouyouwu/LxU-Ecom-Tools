@@ -24,7 +24,6 @@ with st.sidebar:
         
     st.divider()
     
-    # 💡 核心改动：将标签工具移入侧边栏，释放主界面的全部空间给对话框
     st.header("🏷️ 50x30 标签生成")
     val_sku = st.text_input("条码内容 (SKU)", "880123456789")
     val_title = st.text_input("产品标题", "LxU Brand Product")
@@ -34,7 +33,8 @@ with st.sidebar:
         st.session_state.label_img = make_label_50x30(val_sku, val_title, val_spec)
         
     if 'label_img' in st.session_state and st.session_state.label_img:
-        st.image(st.session_state.label_img, use_container_width=True)
+        # 💡 核心修复：把图片自适应宽度的参数改为 use_column_width=True
+        st.image(st.session_state.label_img, use_column_width=True)
         buf = io.BytesIO()
         st.session_state.label_img.save(buf, format="PNG")
         st.download_button("📥 下载标签 (PNG)", buf.getvalue(), f"LxU_{val_sku}.png", use_container_width=True)
@@ -141,7 +141,6 @@ def make_label_50x30(sku, title, spec):
 
 st.title("⚡ LxU 测款指挥舱")
 
-# 欢迎语，采用类似 ChatGPT 的气泡展示
 st.chat_message("assistant").markdown("""
 👋 **老铁，测款指挥舱已彻底进化为全局对话模式！**
 
@@ -150,11 +149,9 @@ st.chat_message("assistant").markdown("""
 2. 或**直接在框内闪烁光标时按 `Ctrl+V` 粘贴你的微信截图**，按下回车即可！
 """)
 
-# 💡 核心升级：全局底部悬浮的对话输入框 (自带附件上传和粘贴功能)
 user_input = st.chat_input("💬 请在此直接 Ctrl+V 粘贴截图，或点击左侧附件图标上传，回车发送...", accept_file="multiple", file_type=["png", "jpg", "jpeg", "webp", "pdf"])
 
 if user_input:
-    # 提取文件 (兼容新版 Streamlit 对象结构)
     files = []
     if hasattr(user_input, "files") and user_input.files:
         files = user_input.files
@@ -162,18 +159,17 @@ if user_input:
         files = user_input["files"]
         
     if not files:
-        # 如果只发了文字没有发图
         with st.chat_message("user"):
             text_val = user_input.text if hasattr(user_input, "text") else str(user_input)
             st.markdown(text_val)
         with st.chat_message("assistant"):
             st.warning("⚠️ 请直接粘贴或上传测款图片，纯文本我可没办法提取商品词哦！")
     else:
-        # 如果发了图片，展示聊天流
         with st.chat_message("user"):
             cols = st.columns(min(len(files), 4))
             for idx, f in enumerate(files):
-                cols[idx % 4].image(f, caption=f.name, use_container_width=True)
+                # 💡 核心修复：同样将这里的参数修正为 use_column_width=True
+                cols[idx % 4].image(f, caption=f.name, use_column_width=True)
                 
         with st.chat_message("assistant"):
             for f in files:
