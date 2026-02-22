@@ -9,7 +9,7 @@ import time
 
 # ================= 1. 页面配置与双保险密钥 =================
 st.set_page_config(page_title="LxU 极简测款助手", layout="wide")
-st.title("⚡ LxU 极简测款助手 (Flash 极速版)")
+st.title("⚡ LxU 极简测款助手 (1.5 Flash 畅飞版)")
 
 # 侧边栏双保险
 with st.sidebar:
@@ -19,19 +19,22 @@ with st.sidebar:
     if not api_key:
         st.warning("👈 请在左侧填入 API Key，或在后台 Secrets 配置。")
         st.stop()
+    else:
+        st.success("✅ 密钥已就绪，每日 1500 次额度拉满！")
 
 genai.configure(api_key=api_key)
 
 if 'keywords_res' not in st.session_state: st.session_state.keywords_res = ""
 if 'label_img' not in st.session_state: st.session_state.label_img = None
 
-# ================= 2. 极简识图引擎 =================
+# ================= 2. 极简识图引擎 (切换至 1.5-flash) =================
 
 def process_lxu_long_image(uploaded_file, prompt):
-    """异步长图解析，防 404 报错稳定流"""
+    """异步长图解析，使用 1.5-flash 引擎获取高额度"""
     try:
+        # ⚠️ 引擎切换：改回 1.5-flash，享受每天 1500 次免费额度
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash", 
+            model_name="gemini-1.5-flash", 
             system_instruction="你是一个精通韩国 Coupang 选品和竞品分析的专家，品牌名为 LxU。"
         )
         
@@ -41,7 +44,7 @@ def process_lxu_long_image(uploaded_file, prompt):
 
         gen_file = genai.upload_file(path=temp_name)
         
-        with st.status(f"⚡ 正在极速扫描：{uploaded_file.name}", expanded=False) as status:
+        with st.status(f"⚡ 正在深度扫描：{uploaded_file.name}", expanded=False) as status:
             while gen_file.state.name == "PROCESSING":
                 time.sleep(2)
                 gen_file = genai.get_file(gen_file.name)
@@ -95,7 +98,6 @@ with tab1:
     
     if files and st.button("🚀 极速提取核心信息", type="primary"):
         for f in files:
-            # 极简版 Prompt，直击要害，杜绝废话
             prompt = """
             任务：极简模式测款提取。
             请直接分析产品图，只输出以下两项内容，严禁任何废话或多余解释：
