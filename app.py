@@ -1,14 +1,18 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import google.generativeai as genai
-from PIL import Image
 import io
 import os
 import time
 import json
 import re
 
-# ================= 1. 核心工具函数 =================
+# ================= 1. 状态锁初始化 =================
+# 核心改动：我们需要把图片的二进制数据存下来，方便后续"刷新"时随时调用
+if 'extractions' not in st.session_state:
+    st.session_state.extractions = []
+
+# ================= 2. 核心工具函数 =================
 
 def render_copy_button(text, key):
     """带 ✅ 成功反馈的一键复制按钮"""
@@ -35,16 +39,16 @@ def render_copy_button(text, key):
     """
     components.html(html_code, height=45)
 
-def process_lxu_long_image(uploaded_file, prompt):
-    """Gemini 2.5 识图核心"""
+def process_lxu_image_bytes(img_bytes, filename, prompt):
+    """支持直接读取字节流的 Gemini 识图核心"""
     try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-flash",
             system_instruction="你是一个精通韩国 Coupang 选品和竞品分析的专家，品牌名为 LxU。"
         )
-        temp_name = f"temp_{int(time.time())}_{uploaded_file.name}"
+        temp_name = f"temp_{int(time.time())}_{filename}"
         with open(temp_name, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+            f.write(img_bytes)
         gen_file = genai.upload_file(path=temp_name)
         response = model.generate_content([gen_file, prompt])
         if os.path.exists(temp_name): os.remove(temp_name)
@@ -52,7 +56,7 @@ def process_lxu_long_image(uploaded_file, prompt):
     except Exception as e:
         return f"❌ 引擎执行出错: {str(e)}"
 
-# ================= 2. 界面配置与侧边栏 =================
+# ================= 3. 界面配置与侧边栏 =================
 
 st.set_page_config(page_title="LxU 测款指挥舱", layout="wide")
 
@@ -66,84 +70,112 @@ with st.sidebar:
     genai.configure(api_key=api_key)
     st.success("✅ 极速引擎已就绪")
 
-# ================= 3. 主界面 (测款识图) =================
+# ================= 4. 主界面 (测款识图) =================
 
 st.title("⚡ LxU 测款指挥舱 (精准找品版)")
-st.info("💡 **效率提示**：微信截图后，在网页任意空白处点击并按 `Ctrl+V`。系统已强制屏蔽泛流量词，专攻精准竞品词。")
+st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。已增加独立刷新功能，哪个结果不满意就单刷哪个！")
 
-# 状态锁
-if 'extractions' not in st.session_state:
-    st.session_state.extractions = []
-
-# 全局粘贴区域
 files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
 if files:
-    # 💡 增加一个触发按钮，防止一粘贴就开始跑，给你反应时间
     if st.button("🚀 开始精准提取竞品词", type="primary", use_container_width=True):
         new_exts = []
         for idx, f in enumerate(files):
-            # 预览折叠逻辑
+            img_bytes = f.getvalue() # 保存图片的二进制数据
+            
             with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
-                st.image(f, use_column_width=True)
+                st.image(img_bytes, use_column_width=True)
                 
             with st.chat_message("assistant"):
-                # 💡 核弹级优化 Prompt：强制锁定“商品属性名词”，禁止形容词和卖点
-                prompt = """
-                任务：你是一个精通韩国Coupang的资深电商选品专家。请分析图片中的产品，提取出5个用于在Coupang前台**精准查找同款竞品**的韩文搜索词。
-
-                ⚠️【极其严格的提取规则 - 违规将导致检索失败】：
-                1. 必须是**具体的实体商品核心名词组合**（例如：타이어 공기압 모니터링 캡, 자동차 밸브캡）。
-                2. **绝对禁止**提取泛流量词、大类目词（如：자동차 용품, 타이어 관리）。
-                3. **绝对禁止**提取产品卖点、形容词、功能描述（如：누출 방지, 안전 운전, 실시간 감지, 삼색 표시）。
-                4. 思考方式：韩国本地买家为了买到这个具体的物件，在搜索框里会输入的**最精准的实体名词**是什么？
-
-                必须严格按照以下 JSON 格式输出，只能输出 JSON 代码，禁止任何其他文字：
+                prompt_full = """
+                任务：分析图片，提取5个用于在Coupang前台精准查找同款竞品的韩文搜索词。
+                ⚠️ 极其严格规则：必须是具体的实体商品名词，禁止泛流量词，禁止形容词和卖点。
+                必须输出纯 JSON 代码：
                 {
                   "keywords": [{"kr": "精准韩文商品名词", "cn": "准确中文翻译"}],
                   "name_cn": "LxU [简短精准的中文实体品名]",
                   "name_kr": "LxU [对应的韩文实体品名]"
                 }
                 """
-                with st.spinner(f"⚡ 正在剔除废词，提取精准竞品词 {f.name} ..."):
-                    res_text = process_lxu_long_image(f, prompt)
+                with st.spinner(f"⚡ 首次提取中 {f.name} ..."):
+                    res_text = process_lxu_image_bytes(img_bytes, f.name, prompt_full)
                 
                 try:
-                    # 强力清洗 JSON 格式
                     json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                     data = json.loads(json_str)
-                    new_exts.append({"file": f.name, "data": data})
+                    new_exts.append({"file": f.name, "bytes": img_bytes, "data": data})
                 except Exception:
                     st.error(f"解析失败。原始内容：\n{res_text}")
         
         st.session_state.extractions = new_exts
 
-# 渲染结果展示区
+# ================= 5. 渲染结果区 (带独立刷新功能) =================
+
 if st.session_state.extractions:
     for idx, item in enumerate(st.session_state.extractions):
-        st.markdown(f"### 📦 {item['file']} 精准提取结果")
-        data = item['data']
+        st.write("---")
         
-        # 关键词提取展示
-        for i, kw in enumerate(data.get('keywords', [])):
+        # ---------------- A. 关键词区域 ----------------
+        c_title, c_btn = st.columns([8, 2])
+        with c_title:
+            st.markdown(f"### 📦 {item['file']} 精准提取结果")
+        with c_btn:
+            # 独立刷新按钮：只更新关键词
+            if st.button("🔄 换一批搜索词", key=f"btn_kw_{idx}", use_container_width=True):
+                prompt_kw = """
+                任务：重新分析图片，提取5个【完全不同于之前】的韩文搜索词。
+                规则依然极其严格：必须是Coupang买家搜索同款用的【实体名词】，禁止形容词、泛流量词和卖点！
+                只输出 keywords 部分的 JSON：
+                {"keywords": [{"kr": "新韩文实体名词", "cn": "中文翻译"}]}
+                """
+                with st.spinner("🔄 正在重新挖掘竞品搜索词..."):
+                    res_text = process_lxu_image_bytes(item['bytes'], item['file'], prompt_kw)
+                    try:
+                        json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
+                        new_kw_data = json.loads(json_str)
+                        # 更新保险箱里的数据
+                        st.session_state.extractions[idx]['data']['keywords'] = new_kw_data.get('keywords', [])
+                        st.rerun() # 强制刷新页面显示新数据
+                    except:
+                        st.error("重抽失败，请再试一次。")
+
+        # 渲染关键词
+        for i, kw in enumerate(item['data'].get('keywords', [])):
             c1, c2, c3 = st.columns([0.5, 6, 4])
             c1.markdown(f"**{i+1}**")
-            with c2:
-                render_copy_button(kw.get('kr', ''), f"kw_{idx}_{i}")
+            with c2: render_copy_button(kw.get('kr', ''), f"kw_{idx}_{i}")
             c3.markdown(f"<div style='padding-top:12px; color:#666;'>{kw.get('cn', '')}</div>", unsafe_allow_html=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # 内部品名提取展示
-        st.markdown("##### 🏷️ 内部实体管理品名")
+        # ---------------- B. 内部品名区域 ----------------
+        n_title, n_btn = st.columns([8, 2])
+        with n_title:
+            st.markdown("##### 🏷️ 内部实体管理品名")
+        with n_btn:
+            # 独立刷新按钮：只更新内部品名
+            if st.button("🔄 换一个品名", key=f"btn_name_{idx}", use_container_width=True):
+                prompt_name = """
+                任务：重新分析图片，为该商品生成一个【全新】的 LxU 品牌内部管理品名。
+                必须简短、精准、是实体名词。只输出 JSON：
+                {"name_cn": "LxU [全新中文实体品名]", "name_kr": "LxU [全新韩文实体品名]"}
+                """
+                with st.spinner("🔄 正在重新命名..."):
+                    res_text = process_lxu_image_bytes(item['bytes'], item['file'], prompt_name)
+                    try:
+                        json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
+                        new_name_data = json.loads(json_str)
+                        st.session_state.extractions[idx]['data']['name_cn'] = new_name_data.get('name_cn', '')
+                        st.session_state.extractions[idx]['data']['name_kr'] = new_name_data.get('name_kr', '')
+                        st.rerun() # 强制刷新页面显示新数据
+                    except:
+                        st.error("重命名失败，请再试一次。")
+
+        # 渲染内部品名
         nc1, nc2 = st.columns([1, 9])
         nc1.write("CN 中文")
-        with nc2:
-            render_copy_button(data.get('name_cn', ''), f"name_cn_{idx}")
+        with nc2: render_copy_button(item['data'].get('name_cn', ''), f"name_cn_{idx}")
         
         kc1, kc2 = st.columns([1, 9])
         kc1.write("KR 韩文")
-        with kc2:
-            render_copy_button(data.get('name_kr', ''), f"name_kr_{idx}")
-        
-        st.divider()
+        with kc2: render_copy_button(item['data'].get('name_kr', ''), f"name_kr_{idx}")
