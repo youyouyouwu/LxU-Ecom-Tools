@@ -8,57 +8,47 @@ import os
 import time
 
 # ================= 1. 页面配置与双保险密钥 =================
-st.set_page_config(page_title="LxU 测品工厂-终极解锁版", layout="wide")
-st.title("⚡ LxU 专属电商工具集 (2.5 Flash 极速引擎)")
+st.set_page_config(page_title="LxU 极简测款助手", layout="wide")
+st.title("⚡ LxU 极简测款助手 (Flash 极速版)")
 
-# 侧边栏双保险：优先读 Secrets，读不到就允许手动输入
+# 侧边栏双保险
 with st.sidebar:
     st.header("⚙️ 引擎配置")
     secret_key = st.secrets.get("GEMINI_API_KEY", "")
-    api_key = st.text_input("Gemini API Key (双保险)", value=secret_key, type="password")
+    api_key = st.text_input("Gemini API Key", value=secret_key, type="password")
     if not api_key:
-        st.warning("👈 请在左侧填入你的 API Key，或在后台 Secrets 配置。")
+        st.warning("👈 请在左侧填入 API Key，或在后台 Secrets 配置。")
         st.stop()
-    else:
-        st.success("✅ 密钥已就绪")
 
-# 初始化 API 配置
 genai.configure(api_key=api_key)
 
-# 状态保持
 if 'keywords_res' not in st.session_state: st.session_state.keywords_res = ""
 if 'label_img' not in st.session_state: st.session_state.label_img = None
 
-# ================= 2. 核心识图引擎 (强制 2.5-flash 通道) =================
+# ================= 2. 极简识图引擎 =================
 
 def process_lxu_long_image(uploaded_file, prompt):
-    """采用 upload_file 逻辑 + 强制 2.5-flash 解决 404 报错"""
+    """异步长图解析，防 404 报错稳定流"""
     try:
-        # ⚠️ 核心修复：强制使用你之前成功代码中的特殊别名 
         model = genai.GenerativeModel(
             model_name="gemini-2.5-flash", 
-            system_instruction="你是一个精通韩国 Coupang 运营的专家，品牌名为 LxU。"
+            system_instruction="你是一个精通韩国 Coupang 选品和竞品分析的专家，品牌名为 LxU。"
         )
         
-        # 1. 物理保存临时文件
         temp_name = f"temp_{int(time.time())}_{uploaded_file.name}"
         with open(temp_name, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # 2. 上传文件至 Google 服务器
         gen_file = genai.upload_file(path=temp_name)
         
-        # 3. 轮询状态：等待处理完毕
-        with st.status(f"⚡ 引擎正在强力扫描详情页：{uploaded_file.name}", expanded=False) as status:
+        with st.status(f"⚡ 正在极速扫描：{uploaded_file.name}", expanded=False) as status:
             while gen_file.state.name == "PROCESSING":
                 time.sleep(2)
                 gen_file = genai.get_file(gen_file.name)
-            status.update(label="✅ 解析完成，正在提炼 LxU 专属文案...", state="complete")
+            status.update(label="✅ 提取完成！", state="complete")
         
-        # 4. 生成报告
         response = model.generate_content([gen_file, prompt])
         
-        # 5. 清理缓存
         if os.path.exists(temp_name):
             os.remove(temp_name)
             
@@ -69,7 +59,7 @@ def process_lxu_long_image(uploaded_file, prompt):
 # ================= 3. 标签绘制逻辑 (50x30mm) =================
 
 def make_label_50x30(sku, title, spec):
-    """生成 50x30mm 标签"""
+    """50x30 标签，自带 MADE IN CHINA"""
     width, height = 400, 240 
     img = Image.new('RGB', (width, height), 'white')
     draw = ImageDraw.Draw(img)
@@ -97,24 +87,25 @@ def make_label_50x30(sku, title, spec):
 
 # ================= 4. 前端交互界面 =================
 
-tab1, tab2 = st.tabs(["📑 详情页识图分析", "🏷️ 50x30 标签生成"])
+tab1, tab2 = st.tabs(["🎯 极简测款提词", "🏷️ 50x30 标签生成"])
 
 with tab1:
-    st.subheader("精铺测品详情页分析 (支持长图)")
-    files = st.file_uploader("上传那张香蕉猫窝的图片", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
+    st.subheader("核心竞品词与内部品名提取 (支持长图)")
+    files = st.file_uploader("上传测款图片", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
     
-    if files and st.button("🚀 启动 LxU 全自动提炼", type="primary"):
+    if files and st.button("🚀 极速提取核心信息", type="primary"):
         for f in files:
+            # 极简版 Prompt，直击要害，杜绝废话
             prompt = """
-            任务：深入分析此图片内容。
-            1. 提取20个符合韩国本土搜索习惯的韩文精准关键词。
-            2. 生成1个以 LxU 开头的高点击率 SEO 标题。
-            3. 撰写5条自然语气、本土化表达的商品好评。
-            要求：除关键词和评价原文外，所有分析解释文字必须用中文。
+            任务：极简模式测款提取。
+            请直接分析产品图，只输出以下两项内容，严禁任何废话或多余解释：
+            
+            1. 【前台竞品搜索词】：提取 3-5 个最核心、最能代表该产品且流量最大的韩文搜索词（需附带中文翻译）。用逗号隔开，方便我直接复制去 Coupang 搜索竞品销量。
+            2. 【内部管理品名】：生成 1 个简短、精准的产品名称（中文 + 韩文），用于内部建档。
             """
             res_text = process_lxu_long_image(f, prompt)
-            st.markdown(f"### 📦 提炼结果：{f.name}")
-            st.markdown(res_text)
+            st.markdown(f"### 📦 {f.name}")
+            st.info(res_text)
             st.divider()
 
 with tab2:
