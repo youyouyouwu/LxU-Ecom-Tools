@@ -8,7 +8,6 @@ import json
 import re
 
 # ================= 1. 状态锁初始化 =================
-# 核心改动：我们需要把图片的二进制数据存下来，方便后续"刷新"时随时调用
 if 'extractions' not in st.session_state:
     st.session_state.extractions = []
 
@@ -58,7 +57,7 @@ def process_lxu_image_bytes(img_bytes, filename, prompt):
 
 # ================= 3. 界面配置与侧边栏 =================
 
-st.set_page_config(page_title="LxU 测款指挥舱", layout="wide")
+st.set_page_config(page_title="品名识别生成工具", layout="wide")
 
 with st.sidebar:
     st.header("⚙️ 引擎配置")
@@ -72,16 +71,17 @@ with st.sidebar:
 
 # ================= 4. 主界面 (测款识图) =================
 
-st.title("⚡ LxU 测款指挥舱 (精准找品版)")
-st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。已增加独立刷新功能，哪个结果不满意就单刷哪个！")
+# 💡 标题和图标已按要求更新
+st.title("🔎 品名识别生成工具")
+st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。已为您强制屏蔽泛流量词，专攻精准实物名词！")
 
 files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
 if files:
-    if st.button("🚀 开始精准提取竞品词", type="primary", use_container_width=True):
+    if st.button("🚀 开始精准提取", type="primary", use_container_width=True):
         new_exts = []
         for idx, f in enumerate(files):
-            img_bytes = f.getvalue() # 保存图片的二进制数据
+            img_bytes = f.getvalue() 
             
             with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
                 st.image(img_bytes, use_column_width=True)
@@ -89,7 +89,7 @@ if files:
             with st.chat_message("assistant"):
                 prompt_full = """
                 任务：分析图片，提取5个用于在Coupang前台精准查找同款竞品的韩文搜索词。
-                ⚠️ 极其严格规则：必须是具体的实体商品名词，禁止泛流量词，禁止形容词和卖点。
+                ⚠️ 极其严格规则：必须是具体的实体商品名词，绝对禁止泛流量词，绝对禁止形容词、功能说明和卖点（如：防漏、安全驾驶、三色显示等）。
                 必须输出纯 JSON 代码：
                 {
                   "keywords": [{"kr": "精准韩文商品名词", "cn": "准确中文翻译"}],
@@ -109,7 +109,7 @@ if files:
         
         st.session_state.extractions = new_exts
 
-# ================= 5. 渲染结果区 (带独立刷新功能) =================
+# ================= 5. 渲染结果区 (带彻底修复的独立刷新) =================
 
 if st.session_state.extractions:
     for idx, item in enumerate(st.session_state.extractions):
@@ -118,28 +118,30 @@ if st.session_state.extractions:
         # ---------------- A. 关键词区域 ----------------
         c_title, c_btn = st.columns([8, 2])
         with c_title:
-            st.markdown(f"### 📦 {item['file']} 精准提取结果")
+            st.markdown(f"### 📦 {item['file']} 识别结果")
         with c_btn:
-            # 独立刷新按钮：只更新关键词
             if st.button("🔄 换一批搜索词", key=f"btn_kw_{idx}", use_container_width=True):
                 prompt_kw = """
                 任务：重新分析图片，提取5个【完全不同于之前】的韩文搜索词。
-                规则依然极其严格：必须是Coupang买家搜索同款用的【实体名词】，禁止形容词、泛流量词和卖点！
+                规则依然极其严格：必须是Coupang买家搜索同款用的【实体名词】，绝对禁止形容词、泛流量词和功能卖点！
                 只输出 keywords 部分的 JSON：
                 {"keywords": [{"kr": "新韩文实体名词", "cn": "中文翻译"}]}
                 """
+                success = False
                 with st.spinner("🔄 正在重新挖掘竞品搜索词..."):
                     res_text = process_lxu_image_bytes(item['bytes'], item['file'], prompt_kw)
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                         new_kw_data = json.loads(json_str)
-                        # 更新保险箱里的数据
                         st.session_state.extractions[idx]['data']['keywords'] = new_kw_data.get('keywords', [])
-                        st.rerun() # 强制刷新页面显示新数据
-                    except:
-                        st.error("重抽失败，请再试一次。")
+                        success = True # 💡 标记解析成功
+                    except Exception:
+                        st.error("重抽失败，大模型返回格式有误，请再试一次。")
+                
+                # 💡 将刷新命令彻底移出 Try-Except，彻底解决报错闪烁 Bug
+                if success:
+                    st.rerun()
 
-        # 渲染关键词
         for i, kw in enumerate(item['data'].get('keywords', [])):
             c1, c2, c3 = st.columns([0.5, 6, 4])
             c1.markdown(f"**{i+1}**")
@@ -153,13 +155,13 @@ if st.session_state.extractions:
         with n_title:
             st.markdown("##### 🏷️ 内部实体管理品名")
         with n_btn:
-            # 独立刷新按钮：只更新内部品名
             if st.button("🔄 换一个品名", key=f"btn_name_{idx}", use_container_width=True):
                 prompt_name = """
                 任务：重新分析图片，为该商品生成一个【全新】的 LxU 品牌内部管理品名。
                 必须简短、精准、是实体名词。只输出 JSON：
                 {"name_cn": "LxU [全新中文实体品名]", "name_kr": "LxU [全新韩文实体品名]"}
                 """
+                success = False
                 with st.spinner("🔄 正在重新命名..."):
                     res_text = process_lxu_image_bytes(item['bytes'], item['file'], prompt_name)
                     try:
@@ -167,11 +169,14 @@ if st.session_state.extractions:
                         new_name_data = json.loads(json_str)
                         st.session_state.extractions[idx]['data']['name_cn'] = new_name_data.get('name_cn', '')
                         st.session_state.extractions[idx]['data']['name_kr'] = new_name_data.get('name_kr', '')
-                        st.rerun() # 强制刷新页面显示新数据
-                    except:
+                        success = True # 💡 标记解析成功
+                    except Exception:
                         st.error("重命名失败，请再试一次。")
+                
+                # 💡 只有确保数据安全存入，才触发无缝刷新
+                if success:
+                    st.rerun()
 
-        # 渲染内部品名
         nc1, nc2 = st.columns([1, 9])
         nc1.write("CN 中文")
         with nc2: render_copy_button(item['data'].get('name_cn', ''), f"name_cn_{idx}")
