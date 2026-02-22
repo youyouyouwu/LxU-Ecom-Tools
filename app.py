@@ -58,7 +58,6 @@ st.set_page_config(page_title="LxU 测款指挥舱", layout="wide")
 
 with st.sidebar:
     st.header("⚙️ 引擎配置")
-    # 尝试从 Secrets 获取，或手动输入
     secret_key = st.secrets.get("GEMINI_API_KEY", "")
     api_key = st.text_input("Gemini API Key", value=secret_key, type="password")
     if not api_key:
@@ -69,61 +68,82 @@ with st.sidebar:
 
 # ================= 3. 主界面 (测款识图) =================
 
-st.title("⚡ LxU 测款指挥舱 (识图专用版)")
-st.info("💡 **效率提示**：微信截图后，在网页任意空白处点击并按 `Ctrl+V`。预览图会自动折叠。")
+st.title("⚡ LxU 测款指挥舱 (精准找品版)")
+st.info("💡 **效率提示**：微信截图后，在网页任意空白处点击并按 `Ctrl+V`。系统已强制屏蔽泛流量词，专攻精准竞品词。")
+
+# 状态锁
+if 'extractions' not in st.session_state:
+    st.session_state.extractions = []
 
 # 全局粘贴区域
 files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
 if files:
-    for idx, f in enumerate(files):
-        # 预览折叠逻辑
-        with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
-            st.image(f, use_column_width=True)
-            
-        with st.chat_message("assistant"):
-            # 强化后的精准 Prompt
-            prompt = """
-            任务：作为精通韩国 Coupang 的专家，提取精准商品名词。
-            必须严格按照以下 JSON 输出，禁止任何说明：
-            {
-              "keywords": [{"kr": "精准韩文名词", "cn": "中文翻译"}...],
-              "name_cn": "LxU [简短精准的中文品名]",
-              "name_kr": "LxU [对应的韩文品名]"
-            }
-            """
-            with st.spinner(f"⚡ 正在分析 {f.name} ..."):
-                res_text = process_lxu_long_image(f, prompt)
-            
-            try:
-                # 强力清洗 JSON 格式，防止解析失败
-                json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
-                data = json.loads(json_str)
+    # 💡 增加一个触发按钮，防止一粘贴就开始跑，给你反应时间
+    if st.button("🚀 开始精准提取竞品词", type="primary", use_container_width=True):
+        new_exts = []
+        for idx, f in enumerate(files):
+            # 预览折叠逻辑
+            with st.expander(f"🖼️ 查看图片预览: {f.name}", expanded=False):
+                st.image(f, use_column_width=True)
                 
-                st.markdown(f"### 📦 {f.name} 提取结果")
+            with st.chat_message("assistant"):
+                # 💡 核弹级优化 Prompt：强制锁定“商品属性名词”，禁止形容词和卖点
+                prompt = """
+                任务：你是一个精通韩国Coupang的资深电商选品专家。请分析图片中的产品，提取出5个用于在Coupang前台**精准查找同款竞品**的韩文搜索词。
+
+                ⚠️【极其严格的提取规则 - 违规将导致检索失败】：
+                1. 必须是**具体的实体商品核心名词组合**（例如：타이어 공기압 모니터링 캡, 자동차 밸브캡）。
+                2. **绝对禁止**提取泛流量词、大类目词（如：자동차 용품, 타이어 관리）。
+                3. **绝对禁止**提取产品卖点、形容词、功能描述（如：누출 방지, 안전 운전, 실시간 감지, 삼색 표시）。
+                4. 思考方式：韩国本地买家为了买到这个具体的物件，在搜索框里会输入的**最精准的实体名词**是什么？
+
+                必须严格按照以下 JSON 格式输出，只能输出 JSON 代码，禁止任何其他文字：
+                {
+                  "keywords": [{"kr": "精准韩文商品名词", "cn": "准确中文翻译"}],
+                  "name_cn": "LxU [简短精准的中文实体品名]",
+                  "name_kr": "LxU [对应的韩文实体品名]"
+                }
+                """
+                with st.spinner(f"⚡ 正在剔除废词，提取精准竞品词 {f.name} ..."):
+                    res_text = process_lxu_long_image(f, prompt)
                 
-                # 关键词提取展示
-                for i, item in enumerate(data.get('keywords', [])):
-                    c1, c2, c3 = st.columns([0.5, 6, 4])
-                    c1.markdown(f"**{i+1}**")
-                    with c2:
-                        render_copy_button(item.get('kr', ''), f"kw_{idx}_{i}")
-                    c3.markdown(f"<div style='padding-top:12px; color:#666;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # 内部品名提取展示
-                st.markdown("##### 🏷️ 内部管理品名 (LxU 品牌)")
-                nc1, nc2 = st.columns([1, 9])
-                nc1.write("CN 中文")
-                with nc2:
-                    render_copy_button(data.get('name_cn', ''), f"name_cn_{idx}")
-                
-                kc1, kc2 = st.columns([1, 9])
-                kc1.write("KR 韩文")
-                with kc2:
-                    render_copy_button(data.get('name_kr', ''), f"name_kr_{idx}")
-                
-                st.divider()
-            except Exception:
-                st.error(f"解析失败。原始内容：\n{res_text}")
+                try:
+                    # 强力清洗 JSON 格式
+                    json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
+                    data = json.loads(json_str)
+                    new_exts.append({"file": f.name, "data": data})
+                except Exception:
+                    st.error(f"解析失败。原始内容：\n{res_text}")
+        
+        st.session_state.extractions = new_exts
+
+# 渲染结果展示区
+if st.session_state.extractions:
+    for idx, item in enumerate(st.session_state.extractions):
+        st.markdown(f"### 📦 {item['file']} 精准提取结果")
+        data = item['data']
+        
+        # 关键词提取展示
+        for i, kw in enumerate(data.get('keywords', [])):
+            c1, c2, c3 = st.columns([0.5, 6, 4])
+            c1.markdown(f"**{i+1}**")
+            with c2:
+                render_copy_button(kw.get('kr', ''), f"kw_{idx}_{i}")
+            c3.markdown(f"<div style='padding-top:12px; color:#666;'>{kw.get('cn', '')}</div>", unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # 内部品名提取展示
+        st.markdown("##### 🏷️ 内部实体管理品名")
+        nc1, nc2 = st.columns([1, 9])
+        nc1.write("CN 中文")
+        with nc2:
+            render_copy_button(data.get('name_cn', ''), f"name_cn_{idx}")
+        
+        kc1, kc2 = st.columns([1, 9])
+        kc1.write("KR 韩文")
+        with kc2:
+            render_copy_button(data.get('name_kr', ''), f"name_kr_{idx}")
+        
+        st.divider()
