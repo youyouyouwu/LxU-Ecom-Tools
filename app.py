@@ -33,7 +33,6 @@ with st.sidebar:
         st.session_state.label_img = make_label_50x30(val_sku, val_title, val_spec)
         
     if 'label_img' in st.session_state and st.session_state.label_img:
-        # 💡 核心修复：把图片自适应宽度的参数改为 use_column_width=True
         st.image(st.session_state.label_img, use_column_width=True)
         buf = io.BytesIO()
         st.session_state.label_img.save(buf, format="PNG")
@@ -96,12 +95,7 @@ def process_lxu_long_image(uploaded_file, prompt):
 
         gen_file = genai.upload_file(path=temp_name)
         
-        with st.status(f"⚡ 正在极速扫描：{uploaded_file.name}", expanded=False) as status:
-            while gen_file.state.name == "PROCESSING":
-                time.sleep(2)
-                gen_file = genai.get_file(gen_file.name)
-            status.update(label="✅ 提取完成！", state="complete")
-        
+        # 不再使用全屏 status，改用更轻量的 spinner
         response = model.generate_content([gen_file, prompt])
         
         if os.path.exists(temp_name):
@@ -137,93 +131,74 @@ def make_label_50x30(sku, title, spec):
     
     return img
 
-# ================= 5. 聊天式主交互界面 =================
+# ================= 5. 主交互界面 =================
 
 st.title("⚡ LxU 测款指挥舱")
 
-st.chat_message("assistant").markdown("""
-👋 **老铁，测款指挥舱已彻底进化为全局对话模式！**
+st.info("💡 **效率秘籍**：请先使用微信截图。然后在当前网页的**任意空白处**点一下鼠标，直接按键盘 `Ctrl+V`，无需按回车即可极速提取！", icon="🚀")
 
-不用再找上传框了，请直接在网页**最底部**的输入框进行操作：
-1. 点击输入框左侧的 📎 / ➕ 图标上传图片。
-2. 或**直接在框内闪烁光标时按 `Ctrl+V` 粘贴你的微信截图**，按下回车即可！
-""")
+# 隐藏了边框的 uploader，专门用来接管全局粘贴
+files = st.file_uploader("📥 [全局粘贴区] 支持直接拖拽或 Ctrl+V 粘贴图片", type=["png", "jpg", "jpeg", "webp", "pdf"], accept_multiple_files=True)
 
-user_input = st.chat_input("💬 请在此直接 Ctrl+V 粘贴截图，或点击左侧附件图标上传，回车发送...", accept_file="multiple", file_type=["png", "jpg", "jpeg", "webp", "pdf"])
-
-if user_input:
-    files = []
-    if hasattr(user_input, "files") and user_input.files:
-        files = user_input.files
-    elif isinstance(user_input, dict) and user_input.get("files"):
-        files = user_input["files"]
-        
-    if not files:
-        with st.chat_message("user"):
-            text_val = user_input.text if hasattr(user_input, "text") else str(user_input)
-            st.markdown(text_val)
-        with st.chat_message("assistant"):
-            st.warning("⚠️ 请直接粘贴或上传测款图片，纯文本我可没办法提取商品词哦！")
-    else:
-        with st.chat_message("user"):
-            cols = st.columns(min(len(files), 4))
-            for idx, f in enumerate(files):
-                # 💡 核心修复：同样将这里的参数修正为 use_column_width=True
-                cols[idx % 4].image(f, caption=f.name, use_column_width=True)
+if files:
+    with st.chat_message("user"):
+        cols = st.columns(min(len(files), 4))
+        for idx, f in enumerate(files):
+            cols[idx % 4].image(f, caption=f.name, use_column_width=True)
+            
+    with st.chat_message("assistant"):
+        for f in files:
+            prompt = """
+            任务：极简模式测款提取。
+            请直接分析产品图，**必须严格按照以下 JSON 格式输出结果**。
+            严禁输出任何废话、Markdown 表格或解释文字，只能输出纯 JSON 代码：
+            
+            ⚠️ 【极其重要的搜索词提取规则】：
+            提取的 5 个韩文搜索词【必须是韩国买家在 Coupang 真实搜索时使用的具体商品名词】（例如：胎压监测帽、汽车气门嘴盖、轮胎压力测试盖）。
+            【严禁】输出任何缺乏购物意图的形容词、功能描述或泛泛之词。所有的词都必须能直接拿到前台精准搜出该类目商品！
+            
+            {
+              "keywords": [
+                {"kr": "精准商品名词1", "cn": "中文翻译1"},
+                {"kr": "精准商品名词2", "cn": "中文翻译2"},
+                {"kr": "精准商品名词3", "cn": "中文翻译3"},
+                {"kr": "精准商品名词4", "cn": "中文翻译4"},
+                {"kr": "精准商品名词5", "cn": "中文翻译5"}
+              ],
+              "name_cn": "LxU [简短精准的中文品名]",
+              "name_kr": "LxU [对应的韩文品名]"
+            }
+            """
+            with st.spinner(f"⚡ 正在深度扫描核心商品词..."):
+                res_text = process_lxu_long_image(f, prompt)
+            
+            try:
+                json_str = res_text.replace("```json", "").replace("```", "").strip()
+                data = json.loads(json_str)
                 
-        with st.chat_message("assistant"):
-            for f in files:
-                prompt = """
-                任务：极简模式测款提取。
-                请直接分析产品图，**必须严格按照以下 JSON 格式输出结果**。
-                严禁输出任何废话、Markdown 表格或解释文字，只能输出纯 JSON 代码：
+                st.markdown("##### 🔍 前台精准竞品搜索词")
+                for i, item in enumerate(data.get('keywords', [])):
+                    c1, c2, c3 = st.columns([0.5, 6, 4])
+                    c1.markdown(f"<div style='padding-top:12px; font-weight:bold; color:#555;'>{i+1}</div>", unsafe_allow_html=True)
+                    with c2:
+                        render_copy_button(item.get('kr', ''))
+                    c3.markdown(f"<div style='padding-top:12px; color:#666;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
                 
-                ⚠️ 【极其重要的搜索词提取规则】：
-                提取的 5 个韩文搜索词【必须是韩国买家在 Coupang 真实搜索时使用的具体商品名词】（例如：胎压监测帽、汽车气门嘴盖、轮胎压力测试盖）。
-                【严禁】输出任何缺乏购物意图的形容词、功能描述或泛泛之词。所有的词都必须能直接拿到前台精准搜出该类目商品！
+                st.markdown("<br>", unsafe_allow_html=True)
                 
-                {
-                  "keywords": [
-                    {"kr": "精准商品名词1", "cn": "中文翻译1"},
-                    {"kr": "精准商品名词2", "cn": "中文翻译2"},
-                    {"kr": "精准商品名词3", "cn": "中文翻译3"},
-                    {"kr": "精准商品名词4", "cn": "中文翻译4"},
-                    {"kr": "精准商品名词5", "cn": "中文翻译5"}
-                  ],
-                  "name_cn": "LxU [简短精准的中文品名]",
-                  "name_kr": "LxU [对应的韩文品名]"
-                }
-                """
-                with st.spinner(f"⚡ 正在深度扫描 {f.name} 的核心商品词..."):
-                    res_text = process_lxu_long_image(f, prompt)
+                st.markdown("##### 🏷️ 内部管理品名")
+                nc1, nc2 = st.columns([1, 9])
+                nc1.markdown("<div style='padding-top:12px; color:#555;'>CN 中文</div>", unsafe_allow_html=True)
+                with nc2:
+                    render_copy_button(data.get('name_cn', ''))
                 
-                try:
-                    json_str = res_text.replace("```json", "").replace("```", "").strip()
-                    data = json.loads(json_str)
-                    
-                    st.markdown("##### 🔍 前台精准竞品搜索词")
-                    for i, item in enumerate(data.get('keywords', [])):
-                        c1, c2, c3 = st.columns([0.5, 6, 4])
-                        c1.markdown(f"<div style='padding-top:12px; font-weight:bold; color:#555;'>{i+1}</div>", unsafe_allow_html=True)
-                        with c2:
-                            render_copy_button(item.get('kr', ''))
-                        c3.markdown(f"<div style='padding-top:12px; color:#666;'>{item.get('cn', '')}</div>", unsafe_allow_html=True)
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    
-                    st.markdown("##### 🏷️ 内部管理品名")
-                    nc1, nc2 = st.columns([1, 9])
-                    nc1.markdown("<div style='padding-top:12px; color:#555;'>CN 中文</div>", unsafe_allow_html=True)
-                    with nc2:
-                        render_copy_button(data.get('name_cn', ''))
-                    
-                    kc1, kc2 = st.columns([1, 9])
-                    kc1.markdown("<div style='padding-top:12px; color:#555;'>KR 韩文</div>", unsafe_allow_html=True)
-                    with kc2:
-                        render_copy_button(data.get('name_kr', ''))
-                    
-                except Exception as parse_err:
-                    st.error("解析数据结构失败，原始返回如下：")
-                    st.markdown(res_text)
-                    
-                st.divider()
+                kc1, kc2 = st.columns([1, 9])
+                kc1.markdown("<div style='padding-top:12px; color:#555;'>KR 韩文</div>", unsafe_allow_html=True)
+                with kc2:
+                    render_copy_button(data.get('name_kr', ''))
+                
+            except Exception as parse_err:
+                st.error("解析数据结构失败，原始返回如下：")
+                st.markdown(res_text)
+                
+            st.divider()
