@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import google.generativeai as genai
+from PIL import Image
 import io
 import os
 import time
@@ -20,8 +21,8 @@ def render_copy_button(text, key):
     <html><head><style>
         body {{ margin: 0; padding: 2px; font-family: sans-serif; }}
         .container {{ display: flex; align-items: center; }}
-        .text-box {{ flex-grow: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 100%; box-sizing: border-box; background: #fdfdfd; }}
-        .copy-btn {{ padding: 8px 15px; background: #fff; border: 1px solid #ddd; border-radius: 4px; margin-left: 8px; cursor: pointer; font-weight: bold; min-width: 80px; transition: 0.2s; }}
+        .text-box {{ flex-grow: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 100%; box-sizing: border-box; background: #fdfdfd; color: #333; }}
+        .copy-btn {{ padding: 8px 15px; background: #fff; border: 1px solid #ddd; border-radius: 4px; margin-left: 8px; cursor: pointer; font-weight: bold; min-width: 80px; transition: 0.2s; color: #333; }}
     </style></head>
     <body><div class="container">
         <input type="text" value="{text}" id="q_{key}" class="text-box" readonly>
@@ -39,7 +40,7 @@ def render_copy_button(text, key):
     components.html(html_code, height=45)
 
 def process_lxu_image_bytes(img_bytes, filename, prompt):
-    """支持直接读取字节流的 Gemini 识图核心"""
+    """Gemini 2.5 识图核心"""
     try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-flash",
@@ -72,12 +73,12 @@ with st.sidebar:
 # ================= 4. 主界面 (测款识图) =================
 
 st.title("🔎 品名识别生成工具")
-st.info("💡 **效率提示**：微信截图后粘贴(Ctrl+V)。已为您强制屏蔽泛流量词。刷新后可无限【撤销返回】，0秒切换无压力！")
+st.info("💡 **全能矩阵**：已加入无标点 Coupang 前台 SEO 标题生成。全部支持无限【撤销返回】！")
 
 files = st.file_uploader("📥 [全局粘贴/拖拽区]", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
 if files:
-    if st.button("🚀 开始精准提取", type="primary", use_container_width=True):
+    if st.button("🚀 开始精准提取与生成", type="primary", use_container_width=True):
         new_exts = []
         for idx, f in enumerate(files):
             img_bytes = f.getvalue() 
@@ -87,28 +88,35 @@ if files:
                 
             with st.chat_message("assistant"):
                 prompt_full = """
-                任务：分析图片，提取5个用于在Coupang前台精准查找同款竞品的韩文搜索词。
-                ⚠️ 极其严格规则：必须是具体的实体商品名词，绝对禁止泛流量词，绝对禁止形容词、功能说明和卖点（如：防漏、安全驾驶、三色显示等）。
+                任务：分析图片，为该商品生成一套完整的Coupang上架信息。
+                
+                ⚠️ 必须遵守的极其严格规则：
+                1. 搜索词(keywords)：提取5个精准查找同款的【实体名词】，绝对禁止泛流量词和形容词。
+                2. 内部品名(name)：简短精准的实体名词。
+                3. 前台销售标题(title_kr)：符合韩国Coupang本土化SEO风格。包含核心名词和适度卖点以提高点击率，但不夸张虚假。【绝对禁止使用任何标点符号（包括逗号、句号、中划线、括号等），词与词之间只能用纯空格分隔！】
+                
                 必须输出纯 JSON 代码：
                 {
-                  "keywords": [{"kr": "精准韩文商品名词", "cn": "准确中文翻译"}],
-                  "name_cn": "LxU [简短精准的中文实体品名]",
-                  "name_kr": "LxU [对应的韩文实体品名]"
+                  "keywords": [{"kr": "精准韩文名词", "cn": "中文翻译"}],
+                  "name_cn": "LxU [简短中文实体品名]",
+                  "name_kr": "LxU [韩文实体品名]",
+                  "title_kr": "LxU [纯空格分隔的韩文无标点SEO销售标题]"
                 }
                 """
-                with st.spinner(f"⚡ 首次提取中 {f.name} ..."):
+                with st.spinner(f"⚡ 首次提取与生成中 {f.name} ..."):
                     res_text = process_lxu_image_bytes(img_bytes, f.name, prompt_full)
                 
                 try:
                     json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                     data = json.loads(json_str)
-                    # 💡 核心新增：为每个图片建立独立的关键词和品名“记忆历史栈”
+                    
                     new_exts.append({
                         "file": f.name, 
                         "bytes": img_bytes, 
                         "data": data,
-                        "kw_history": [],     # 关键词历史库
-                        "name_history": []    # 品名历史库
+                        "kw_history": [],     
+                        "name_history": [],
+                        "title_history": []   # 💡 新增：标题历史记忆栈
                     })
                 except Exception:
                     st.error(f"解析失败。原始内容：\n{res_text}")
@@ -122,16 +130,13 @@ if st.session_state.extractions:
         st.write("---")
         
         # ---------------- A. 关键词区域 ----------------
-        # 布局改为 3 列，给撤销按钮留出位置
         c_title, c_undo_kw, c_btn_kw = st.columns([6, 2, 2])
         with c_title:
             st.markdown(f"### 📦 {item['file']} 识别结果")
             
         with c_undo_kw:
-            # 💡 如果历史库里有数据，才显示“撤销”按钮
             if item.get('kw_history'):
                 if st.button("⏪ 撤销返回", key=f"undo_kw_{idx}", use_container_width=True):
-                    # 从历史库中弹出上一版数据，覆盖当前数据，瞬间刷新页面
                     prev_kw = st.session_state.extractions[idx]['kw_history'].pop()
                     st.session_state.extractions[idx]['data']['keywords'] = prev_kw
                     st.rerun()
@@ -139,32 +144,29 @@ if st.session_state.extractions:
         with c_btn_kw:
             if st.button("🔄 换一批搜索词", key=f"btn_kw_{idx}", use_container_width=True):
                 prompt_kw = """
-                任务：重新分析图片，提取5个【完全不同于之前】的韩文搜索词。
-                规则依然极其严格：必须是Coupang买家搜索同款用的【实体名词】，绝对禁止形容词、泛流量词和功能卖点！
-                只输出 keywords 部分的 JSON：
+                任务：提取5个【完全不同于之前】的韩文搜索词。
+                规则：必须是Coupang买家搜索用的【实体名词】，绝对禁止形容词、泛流量词和功能卖点！
+                只输出 keywords 的 JSON：
                 {"keywords": [{"kr": "新韩文实体名词", "cn": "中文翻译"}]}
                 """
                 success = False
-                with st.spinner("🔄 正在重新挖掘竞品搜索词..."):
+                with st.spinner("🔄 重新挖掘搜索词..."):
                     res_text = process_lxu_image_bytes(item['bytes'], item['file'], prompt_kw)
                     try:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                         new_kw_data = json.loads(json_str)
                         
-                        # 💡 核心：在更新前，把【当前数据】塞进记忆历史栈
                         current_kw = st.session_state.extractions[idx]['data'].get('keywords', [])
                         st.session_state.extractions[idx]['kw_history'].append(current_kw)
                         
-                        # 更新为新数据
                         st.session_state.extractions[idx]['data']['keywords'] = new_kw_data.get('keywords', [])
                         success = True
                     except Exception:
-                        st.error("重抽失败，大模型返回格式有误，请再试一次。")
+                        st.error("重抽失败，请再试一次。")
                 
                 if success:
                     st.rerun()
 
-        # 渲染关键词列表
         for i, kw in enumerate(item['data'].get('keywords', [])):
             c1, c2, c3 = st.columns([0.5, 6, 4])
             c1.markdown(f"**{i+1}**")
@@ -179,7 +181,6 @@ if st.session_state.extractions:
             st.markdown("##### 🏷️ 内部实体管理品名")
             
         with n_undo_name:
-            # 💡 品名的独立撤销功能
             if item.get('name_history'):
                 if st.button("⏪ 撤销返回", key=f"undo_name_{idx}", use_container_width=True):
                     prev_name = st.session_state.extractions[idx]['name_history'].pop()
@@ -190,9 +191,9 @@ if st.session_state.extractions:
         with n_btn_name:
             if st.button("🔄 换一个品名", key=f"btn_name_{idx}", use_container_width=True):
                 prompt_name = """
-                任务：重新分析图片，为该商品生成一个【全新】的 LxU 品牌内部管理品名。
-                必须简短、精准、是实体名词。只输出 JSON：
-                {"name_cn": "LxU [全新中文实体品名]", "name_kr": "LxU [全新韩文实体品名]"}
+                任务：生成一个【全新】的 LxU 品牌内部管理品名。必须简短、精准、是实体名词。
+                只输出 JSON：
+                {"name_cn": "LxU [新中文实体品名]", "name_kr": "LxU [新韩文实体品名]"}
                 """
                 success = False
                 with st.spinner("🔄 正在重新命名..."):
@@ -201,14 +202,12 @@ if st.session_state.extractions:
                         json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
                         new_name_data = json.loads(json_str)
                         
-                        # 💡 核心：在更新前，把【当前名字】塞进记忆历史栈
                         current_name = {
                             "name_cn": st.session_state.extractions[idx]['data'].get('name_cn', ''),
                             "name_kr": st.session_state.extractions[idx]['data'].get('name_kr', '')
                         }
                         st.session_state.extractions[idx]['name_history'].append(current_name)
                         
-                        # 更新为新名字
                         st.session_state.extractions[idx]['data']['name_cn'] = new_name_data.get('name_cn', '')
                         st.session_state.extractions[idx]['data']['name_kr'] = new_name_data.get('name_kr', '')
                         success = True
@@ -218,7 +217,6 @@ if st.session_state.extractions:
                 if success:
                     st.rerun()
 
-        # 渲染内部品名
         nc1, nc2 = st.columns([1, 9])
         nc1.write("CN 中文")
         with nc2: render_copy_button(item['data'].get('name_cn', ''), f"name_cn_{idx}")
@@ -226,3 +224,48 @@ if st.session_state.extractions:
         kc1, kc2 = st.columns([1, 9])
         kc1.write("KR 韩文")
         with kc2: render_copy_button(item['data'].get('name_kr', ''), f"name_kr_{idx}")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ---------------- C. 前台销售标题区域 ----------------
+        t_title, t_undo_title, t_btn_title = st.columns([6, 2, 2])
+        with t_title:
+            st.markdown("##### 🛒 前台销售标题 (Coupang SEO)")
+            
+        with t_undo_title:
+            if item.get('title_history'):
+                if st.button("⏪ 撤销返回", key=f"undo_title_{idx}", use_container_width=True):
+                    prev_title = st.session_state.extractions[idx]['title_history'].pop()
+                    st.session_state.extractions[idx]['data']['title_kr'] = prev_title
+                    st.rerun()
+                    
+        with t_btn_title:
+            if st.button("🔄 换一个标题", key=f"btn_title_{idx}", use_container_width=True):
+                prompt_title = """
+                任务：为该商品生成一个【全新】的Coupang前台销售标题。
+                要求：必须符合韩国本土化SEO风格，适度体现不同于之前的卖点以提高点击率。
+                ⚠️ 【绝对禁止】夸张宣传，绝对禁止在标题中使用任何标点符号（只能用空格分隔词组）！
+                只输出 JSON：
+                {"title_kr": "LxU [全新韩文无标点SEO销售标题]"}
+                """
+                success = False
+                with st.spinner("🔄 正在重写销售标题..."):
+                    res_text = process_lxu_image_bytes(item['bytes'], item['file'], prompt_title)
+                    try:
+                        json_str = re.search(r"\{.*\}", res_text, re.DOTALL).group()
+                        new_title_data = json.loads(json_str)
+                        
+                        current_title = st.session_state.extractions[idx]['data'].get('title_kr', '')
+                        st.session_state.extractions[idx]['title_history'].append(current_title)
+                        
+                        st.session_state.extractions[idx]['data']['title_kr'] = new_title_data.get('title_kr', '')
+                        success = True
+                    except Exception:
+                        st.error("标题重写失败，请再试一次。")
+                
+                if success:
+                    st.rerun()
+
+        tc1, tc2 = st.columns([1, 9])
+        tc1.write("KR 标题")
+        with tc2: render_copy_button(item['data'].get('title_kr', ''), f"title_kr_{idx}")
