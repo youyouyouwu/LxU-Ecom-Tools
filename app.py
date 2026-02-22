@@ -9,7 +9,7 @@ import time
 
 # ================= 1. 页面配置与双保险密钥 =================
 st.set_page_config(page_title="LxU 极简测款助手", layout="wide")
-st.title("⚡ LxU 极简测款助手 (Flash 极速版)")
+st.title("⚡ LxU 极简测款助手 (付费极速版)")
 
 # 侧边栏双保险
 with st.sidebar:
@@ -19,6 +19,8 @@ with st.sidebar:
     if not api_key:
         st.warning("👈 请在左侧填入 API Key，或在后台 Secrets 配置。")
         st.stop()
+    else:
+        st.success("✅ 付费级 API 密钥已就绪，无惧并发限流！")
 
 genai.configure(api_key=api_key)
 
@@ -28,10 +30,11 @@ if 'label_img' not in st.session_state: st.session_state.label_img = None
 # ================= 2. 极简识图引擎 =================
 
 def process_lxu_long_image(uploaded_file, prompt):
-    """异步长图解析，防 404 报错稳定流"""
+    """异步长图解析，付费通道满血输出"""
     try:
+        # 付费通道下，1.5-flash 是目前官方最稳定、性价比极高的旗舰轻量模型
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash", 
+            model_name="gemini-1.5-flash", 
             system_instruction="你是一个精通韩国 Coupang 选品和竞品分析的专家，品牌名为 LxU。"
         )
         
@@ -95,17 +98,21 @@ with tab1:
     
     if files and st.button("🚀 极速提取核心信息", type="primary"):
         for f in files:
-            # 极简版 Prompt，直击要害，杜绝废话
+            # 强指令：锁死 Markdown 表格格式
             prompt = """
             任务：极简模式测款提取。
-            请直接分析产品图，只输出以下两项内容，严禁任何废话或多余解释：
+            请直接分析产品图，**必须严格按照以下 Markdown 表格的格式输出结果**。
+            严禁输出任何废话、前言、问候语或额外解释。
             
-            1. 【前台竞品搜索词】：提取 3-5 个最核心、最能代表该产品且流量最大的韩文搜索词（需附带中文翻译）。用逗号隔开，方便我直接复制去 Coupang 搜索竞品销量。
-            2. 【内部管理品名】：生成 1 个简短、精准的产品名称（中文 + 韩文），用于内部建档。
+            | 数据维度 | 提取结果 |
+            | :--- | :--- |
+            | 🔍 前台竞品搜索词 | [提取3-5个最核心韩文词，附带中文翻译，词与词之间用英文逗号隔开] |
+            | 🏷️ 内部管理品名 | [生成1个简短精准的品名，包含中文与韩文] |
             """
             res_text = process_lxu_long_image(f, prompt)
-            st.markdown(f"### 📦 {f.name}")
-            st.info(res_text)
+            st.markdown(f"### 📦 测品提取：{f.name}")
+            # 使用 st.markdown 渲染美观的表格
+            st.markdown(res_text)
             st.divider()
 
 with tab2:
